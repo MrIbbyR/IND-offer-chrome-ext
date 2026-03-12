@@ -339,6 +339,14 @@
       display: none;
     }
     .currency-note.visible { display: block; }
+
+    /* ── Usage count ── */
+    .usage-count {
+      margin: 8px 16px 14px;
+      font-size: 10px;
+      color: var(--muted);
+    }
+    .usage-count .usage-num { color: var(--accent); font-weight: 600; }
   </style>
 </head>
 <body>
@@ -405,6 +413,12 @@
       <span class="pill-num" id="sumErrors">0</span>
       <span class="pill-label">Errors</span>
     </div>
+  </div>
+
+  <!-- Usage count (always visible) -->
+  <div class="usage-count" id="usageCount">
+    <span class="usage-label">Total uses:</span>
+    <span class="usage-num" id="usageNum">0</span>
   </div>
 
   <script src="xlsx-mini.js"></script>

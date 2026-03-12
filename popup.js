@@ -2,7 +2,7 @@
 // Uses xlsx-mini.js (local, self-contained — no CDN required).
 
 const BINDINGS = [
-  { label: "Annual Salary",                       cell: "E21" },
+  { label: "Annual Salary",                       cell: "E16" },  // Same as Total Base Salary (Annual)
   { label: "Pay Based on Frequency",              cell: "D6"  },
   { label: "Basic Pay (Annual)",                  cell: "E6"  },
   { label: "House Rent Allowance (Monthly)",      cell: "D7"  },
@@ -23,6 +23,20 @@ const BINDINGS = [
 
 // ── State ──
 let parsedValues = {};  // { cell: formattedString }
+
+// ── Usage tracking (local only; for rollout analytics add a backend ping) ──
+async function loadUsageCount() {
+  const { usageCount = 0 } = await chrome.storage.local.get("usageCount");
+  const el = document.getElementById("usageNum");
+  if (el) el.textContent = usageCount;
+}
+async function incrementUsageCount() {
+  const { usageCount = 0 } = await chrome.storage.local.get("usageCount");
+  const next = usageCount + 1;
+  await chrome.storage.local.set({ usageCount: next });
+  const el = document.getElementById("usageNum");
+  if (el) el.textContent = next;
+}
 
 // ── DOM refs ──
 const dropZone     = document.getElementById("dropZone");
@@ -142,6 +156,9 @@ function handleFile(file) {
   reader.readAsArrayBuffer(file);
 }
 
+// Load usage count when popup opens
+loadUsageCount();
+
 // ── Drag & drop ──
 dropZone.addEventListener("dragover", e => {
   e.preventDefault();
@@ -256,6 +273,7 @@ runBtn.addEventListener("click", async () => {
 
   setStatus(errCount === 0 ? "done" : "error",
             errCount === 0 ? `Done — ${data.filled} fields filled` : `Done with ${errCount} errors`);
+  if (data.filled > 0) incrementUsageCount();
   runBtn.disabled = false;
 });
 
