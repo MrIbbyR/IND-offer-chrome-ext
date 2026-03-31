@@ -1,0 +1,10 @@
+# Patch MetalLB Service: use Cluster instead of Local so kube-proxy handles DNAT
+# consistently (often fixes UDP timeouts to LoadBalancer IP from LAN + hairpin).
+# Apply: kubectl apply -f pihole-lb-service-cluster-policy.yaml
+apiVersion: v1
+kind: Service
+metadata:
+  name: pihole-lb
+  namespace: pihole
+spec:
+  externalTrafficPolicy: Cluster

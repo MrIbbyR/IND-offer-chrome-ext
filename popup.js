@@ -1,4 +1,4 @@
-// popup.js — SR Offer Filler
+// popup.js — SR Tools: Mr Offer + Cost assist
 // Uses xlsx-mini.js (local, self-contained — no CDN required).
 
 const BINDINGS = [
@@ -58,6 +58,148 @@ const sumCurrency  = document.getElementById("sumCurrency");
 const sumCurrencyPill = document.getElementById("sumCurrencyPill");
 const sumErrors    = document.getElementById("sumErrors");
 const sumErrorPill = document.getElementById("sumErrorPill");
+
+const tabOffer  = document.getElementById("tabOffer");
+const tabSalary = document.getElementById("tabSalary");
+const panelOffer  = document.getElementById("panel-offer");
+const panelSalary = document.getElementById("panel-salary");
+
+const salaryMax       = document.getElementById("salaryMax");
+const salaryMin       = document.getElementById("salaryMin");
+const salaryHints     = document.getElementById("salaryHints");
+const salaryMoveHint  = document.getElementById("salaryMoveHint");
+const salaryWait      = document.getElementById("salaryWait");
+const salaryDryRun    = document.getElementById("salaryDryRun");
+const btnSalaryQueue    = document.getElementById("btnSalaryQueue");
+const btnSalaryStop     = document.getElementById("btnSalaryStop");
+const salaryStatusBox   = document.getElementById("salaryStatusBox");
+const salaryStatusDot   = document.getElementById("salaryStatusDot");
+const salaryStatusLabel = document.getElementById("salaryStatusLabel");
+const salaryLogEl       = document.getElementById("salaryLog");
+
+const SALARY_STORAGE_KEYS = [
+  "salaryTriageMax",
+  "salaryTriageMin",
+  "salaryTriageHints",
+  "salaryTriageMove",
+  "salaryTriageWait",
+  "salaryTriageDryRun",
+];
+
+// ── Tabs ──
+function showPanel(which) {
+  const offer = which === "offer";
+  tabOffer.classList.toggle("active", offer);
+  tabSalary.classList.toggle("active", !offer);
+  panelOffer.classList.toggle("visible", offer);
+  panelSalary.classList.toggle("visible", !offer);
+}
+
+tabOffer.addEventListener("click", () => showPanel("offer"));
+tabSalary.addEventListener("click", () => showPanel("salary"));
+
+// ── Cost assist settings (chrome.storage) ──
+async function loadSalarySettings() {
+  const s = await chrome.storage.local.get(SALARY_STORAGE_KEYS);
+  if (s.salaryTriageMax != null) salaryMax.value = String(s.salaryTriageMax);
+  if (s.salaryTriageMin != null) salaryMin.value = String(s.salaryTriageMin);
+  if (s.salaryTriageHints) salaryHints.value = s.salaryTriageHints;
+  if (s.salaryTriageMove) salaryMoveHint.value = s.salaryTriageMove;
+  if (s.salaryTriageWait != null) salaryWait.value = String(s.salaryTriageWait);
+  if (s.salaryTriageDryRun === true) salaryDryRun.checked = true;
+}
+
+async function saveSalarySettings() {
+  await chrome.storage.local.set({
+    salaryTriageMax: salaryMax.value.trim(),
+    salaryTriageMin: salaryMin.value.trim(),
+    salaryTriageHints: salaryHints.value.trim(),
+    salaryTriageMove: salaryMoveHint.value.trim(),
+    salaryTriageWait: salaryWait.value.trim(),
+    salaryTriageDryRun: salaryDryRun.checked,
+  });
+}
+
+/** Same rules as salary-triage-core parseSalaryNumber / budget (Indian commas, 35L, ranges). */
+function parseCostAssistBudgetInput(raw) {
+  const s0 = String(raw ?? "").trim();
+  if (!s0) return NaN;
+  const lower = s0.toLowerCase();
+  let wordMult = 1;
+  if (/\bcr(?:ore)?s?\b/.test(lower)) wordMult = 1e7;
+  else if (/\blakhs?\b|\blacs?\b/.test(lower)) wordMult = 1e5;
+  else if (/\bmillion\b|\bmn\b/.test(lower)) wordMult = 1e6;
+  let work = s0.replace(/\u2013|\u2014/g, "-").replace(/(\d+(?:\.\d+)?)\s*[lL]\b/g, function (_, n) {
+    return String(Math.round(parseFloat(n) * 1e5));
+  });
+  work = work
+    .replace(/\b(eur|euros?|€|usd|\$|gbp|£|inr|₹|myr|rm|bgn|leva|ctc)\b/gi, " ")
+    .replace(/\blakhs?\b|\blacs?\b/gi, " ")
+    .replace(/\bcr(?:ore)?s?\b/gi, " ")
+    .replace(/\bmillion\b|\bmn\b/gi, " ");
+  work = work.replace(/,/g, "");
+  let kMult = 1;
+  if (/\d\s*k\b/i.test(lower) || /\d+k\b/i.test(lower.replace(/,/g, ""))) kMult = 1000;
+  const nums = [];
+  const re = /(\d+(?:\.\d+)?)/g;
+  let m;
+  while ((m = re.exec(work))) {
+    const v = parseFloat(m[1]);
+    if (isFinite(v)) nums.push(v);
+  }
+  if (!nums.length) return NaN;
+  const rangeLike =
+    /\d+\s*[-–—]\s*\d+/.test(s0) || /\d+\s+to\s+\d+/i.test(lower) || /\bbetween\b/i.test(lower);
+  if (nums.length >= 2 && rangeLike) return Math.max.apply(null, nums) * wordMult * kMult;
+  return nums[nums.length - 1] * wordMult * kMult;
+}
+
+function readSalaryConfig() {
+  return {
+    maxSalary: salaryMax.value.trim(),
+    minSalary: salaryMin.value.trim(),
+    questionHints: salaryHints.value.trim(),
+    moveButtonIncludes: salaryMoveHint.value.trim(),
+    dryRun: salaryDryRun.checked,
+    screeningWaitMs: salaryWait.value.trim() === "" ? 1200 : parseInt(salaryWait.value, 10),
+  };
+}
+
+[salaryMax, salaryMin, salaryHints, salaryMoveHint, salaryWait, salaryDryRun].forEach((el) => {
+  if (!el) return;
+  el.addEventListener("change", () => saveSalarySettings().catch(() => {}));
+});
+
+function salaryLog(icon, msg) {
+  const line = document.createElement("div");
+  line.className = "log-line";
+  const cls = icon === "✓" ? "tick" : icon === "✗" ? "cross" : "wait";
+  line.innerHTML = `<span class="${cls}">${icon}</span><span class="msg">${msg}</span>`;
+  salaryLogEl.appendChild(line);
+  salaryLogEl.scrollTop = salaryLogEl.scrollHeight;
+}
+
+function setSalaryStatus(state, label) {
+  salaryStatusDot.className = "status-dot " + state;
+  salaryStatusLabel.textContent = label;
+}
+
+async function getSmartRecruitersTab() {
+  const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+  if (!tab?.id) return null;
+  const u = tab.url || "";
+  if (!/smartrecruiters\.com/i.test(u)) {
+    return null;
+  }
+  return tab;
+}
+
+async function ensureSalaryCore(tabId) {
+  await chrome.scripting.executeScript({
+    target: { tabId, allFrames: false },
+    files: ["salary-triage-core.js"],
+  });
+}
 
 // ── Number formatter (mirrors Python _fmt_num) ──
 function fmtNum(v) {
@@ -156,8 +298,9 @@ function handleFile(file) {
   reader.readAsArrayBuffer(file);
 }
 
-// Load usage count when popup opens
+// Load usage count + Cost assist defaults when popup opens
 loadUsageCount();
+loadSalarySettings().catch(() => {});
 
 // ── Drag & drop ──
 dropZone.addEventListener("dragover", e => {
@@ -275,6 +418,88 @@ runBtn.addEventListener("click", async () => {
             errCount === 0 ? `Done — ${data.filled} fields filled` : `Done with ${errCount} errors`);
   if (data.filled > 0) incrementUsageCount();
   runBtn.disabled = false;
+});
+
+// ── Cost assist: queue from Applicants list ──
+btnSalaryQueue.addEventListener("click", async () => {
+  await saveSalarySettings().catch(() => {});
+  const cfg = readSalaryConfig();
+  const maxParsed = parseCostAssistBudgetInput(cfg.maxSalary);
+  if (!isFinite(maxParsed) || maxParsed <= 0) {
+    salaryStatusBox.classList.add("visible");
+    salaryLogEl.innerHTML = "";
+    salaryLog("✗", "Enter a valid max budget (e.g. 3500000, 35,00,000, or 35L — same scale as screening answers).");
+    setSalaryStatus("error", "Need max budget");
+    return;
+  }
+
+  const tab = await getSmartRecruitersTab();
+  if (!tab) {
+    salaryStatusBox.classList.add("visible");
+    salaryLogEl.innerHTML = "";
+    salaryLog("✗", "Open SmartRecruiters (prospect list).");
+    setSalaryStatus("error", "Wrong tab");
+    return;
+  }
+
+  btnSalaryQueue.disabled = true;
+  salaryStatusBox.classList.add("visible");
+  salaryLogEl.innerHTML = "";
+  setSalaryStatus("salary-running", "Starting…");
+
+  try {
+    await ensureSalaryCore(tab.id);
+    const [inj] = await chrome.scripting.executeScript({
+      target: { tabId: tab.id, allFrames: false },
+      func: (c) => globalThis.__srSalaryTriageStartQueue(c),
+      args: [cfg],
+    });
+    const out = inj?.result;
+    const lines = out?.log || [];
+    for (const e of lines) salaryLog(e.ok ? "✓" : "✗", e.msg);
+    if (out?.ok && out?.queued) {
+      const modeHint =
+        out.mode === "click"
+          ? "Click-through queue: opening each name in the same tab."
+          : "URL queue: jumping to each profile URL.";
+      salaryLog("✓", modeHint);
+      salaryLog("✓", "Keep this browser tab focused; results also saved when finished.");
+      setSalaryStatus("salary-done", "Cost assist running — keep tab focused");
+    } else {
+      setSalaryStatus("error", "Queue failed");
+    }
+  } catch (e) {
+    salaryLog("✗", String(e?.message || e));
+    setSalaryStatus("error", "Failed");
+  }
+
+  btnSalaryQueue.disabled = false;
+});
+
+// ── Stop queue ──
+btnSalaryStop.addEventListener("click", async () => {
+  const tab = await getSmartRecruitersTab();
+  salaryStatusBox.classList.add("visible");
+  salaryLogEl.innerHTML = "";
+  if (!tab) {
+    salaryLog("✗", "Open a SmartRecruiters tab to clear queue.");
+    return;
+  }
+  try {
+    await chrome.scripting.executeScript({
+      target: { tabId: tab.id, allFrames: false },
+      func: () => {
+        try {
+          sessionStorage.removeItem("sr_ext_salary_triage_v1");
+          sessionStorage.removeItem("sr_ext_salary_triage_busy");
+        } catch (_) {}
+      },
+    });
+    salaryLog("✓", "Cost assist queue cleared.");
+    setSalaryStatus("salary-done", "Stopped");
+  } catch (e) {
+    salaryLog("✗", String(e?.message || e));
+  }
 });
 
 function contentFill(payload) {
