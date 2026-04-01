@@ -902,17 +902,34 @@
       return { log, moved: false, skipped: true, amount: null, inBudget: null };
     }
 
-    await sleep(parseInt(config.screeningWaitMs, 10) || 1200);
+    var baseWait = parseInt(config.screeningWaitMs, 10) || 1200;
+    var minWait = Math.max(1000, Math.min(baseWait, 1500));
+    await sleep(minWait);
 
-    let pairs = [];
-    try {
-      pairs = getScreeningPairs(doc, win);
-    } catch (e) {
-      log.push({ ok: false, msg: "Screening parse error: " + (e && e.message) });
-      return { log, moved: false, skipped: true, amount: null, inBudget: null };
+    var pairsMaxWait = Math.max(baseWait, 6000);
+    var pollStep = 300;
+    var pairs = [];
+    var pollStart = Date.now();
+    while (Date.now() - pollStart < pairsMaxWait) {
+      try {
+        pairs = getScreeningPairs(doc, win);
+      } catch (e) {
+        pairs = [];
+      }
+      if (pairs.length >= 2) break;
+      if (pairs.length === 1 && (Date.now() - pollStart) >= 2000) break;
+      await sleep(pollStep);
+    }
+    if (pairs.length === 0) {
+      try {
+        pairs = getScreeningPairs(doc, win);
+      } catch (e) {
+        log.push({ ok: false, msg: "Screening parse error: " + (e && e.message) });
+        return { log, moved: false, skipped: true, amount: null, inBudget: null };
+      }
     }
 
-    log.push({ ok: true, msg: "Screening Q&A blocks: " + pairs.length });
+    log.push({ ok: true, msg: "Screening Q&A blocks: " + pairs.length + " (waited " + (Date.now() - pollStart) + "ms)" });
 
     const picked = pickSalaryPair(pairs, hintsNorm);
     if (!picked) {
