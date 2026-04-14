@@ -106,6 +106,11 @@
       return;
     }
     await sleep(650);
+    if (typeof globalThis.__srAutoscrollApplicantListUntilLoaded === "function") {
+      try {
+        await globalThis.__srAutoscrollApplicantListUntilLoaded();
+      } catch (_) {}
+    }
     var collect = globalThis.__srCollectApplicantClickTargets;
     if (typeof collect !== "function") {
       showToast("Keyword search: extension core missing — reload extension.");

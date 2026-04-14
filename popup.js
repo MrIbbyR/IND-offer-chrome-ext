@@ -191,7 +191,7 @@ async function getSmartRecruitersTab() {
 async function ensureSalaryCore(tabId) {
   await chrome.scripting.executeScript({
     target: { tabId, allFrames: false },
-    files: ["salary-triage-core.js"],
+    files: ["sr-list-autoscroll.js", "salary-triage-core.js"],
   });
 }
 
@@ -498,7 +498,10 @@ btnSalaryStop.addEventListener("click", async () => {
 
 // ── Keyword Search: DOM refs ──
 const kwInput         = document.getElementById("kwInput");
+const kwCustomExpansions = document.getElementById("kwCustomExpansions");
+const kwCustomExpansionsFile = document.getElementById("kwCustomExpansionsFile");
 const kwMinHits       = document.getElementById("kwMinHits");
+const kwPostToNotes   = document.getElementById("kwPostToNotes");
 const kwDryRun        = document.getElementById("kwDryRun");
 const btnKwGo         = document.getElementById("btnKwGo");
 const btnKwStop       = document.getElementById("btnKwStop");
@@ -507,19 +510,27 @@ const kwStatusDot     = document.getElementById("kwStatusDot");
 const kwStatusLabel   = document.getElementById("kwStatusLabel");
 const kwLogEl         = document.getElementById("kwLog");
 
-const KW_STORAGE_KEYS = ["kwTriageKeywords", "kwTriageMinHits", "kwTriageDryRun"];
+const KW_STORAGE_KEYS = ["kwTriageKeywords", "kwTriageCustomExpansions", "kwTriageMinHits", "kwTriagePostToNotes", "kwTriageDryRun"];
 
 async function loadKwSettings() {
   const s = await chrome.storage.local.get(KW_STORAGE_KEYS);
   if (s.kwTriageKeywords != null) kwInput.value = String(s.kwTriageKeywords);
+  if (kwCustomExpansions && s.kwTriageCustomExpansions != null) {
+    kwCustomExpansions.value = String(s.kwTriageCustomExpansions);
+  }
   if (s.kwTriageMinHits != null) kwMinHits.value = String(s.kwTriageMinHits);
+  if (s.kwTriagePostToNotes != null) {
+    kwPostToNotes.checked = !!s.kwTriagePostToNotes;
+  }
   if (s.kwTriageDryRun === true) kwDryRun.checked = true;
 }
 
 async function saveKwSettings() {
   await chrome.storage.local.set({
     kwTriageKeywords: kwInput.value.trim(),
+    kwTriageCustomExpansions: kwCustomExpansions ? kwCustomExpansions.value : "",
     kwTriageMinHits: kwMinHits.value.trim(),
+    kwTriagePostToNotes: kwPostToNotes.checked,
     kwTriageDryRun: kwDryRun.checked,
   });
 }
@@ -527,14 +538,212 @@ async function saveKwSettings() {
 function readKwConfig() {
   return {
     keywords: kwInput.value.trim(),
+    customKeywordExpansions: kwCustomExpansions ? kwCustomExpansions.value : "",
     minHits: kwMinHits.value.trim() === "" ? 2 : parseInt(kwMinHits.value, 10),
+    postToNotes: kwPostToNotes.checked,
     dryRun: kwDryRun.checked,
   };
 }
 
-[kwInput, kwMinHits, kwDryRun].forEach((el) => {
+[kwInput, kwCustomExpansions, kwMinHits, kwPostToNotes, kwDryRun].forEach((el) => {
   if (!el) return;
   el.addEventListener("change", () => saveKwSettings().catch(() => {}));
+});
+
+if (kwCustomExpansionsFile && kwCustomExpansions) {
+  kwCustomExpansionsFile.addEventListener("change", () => {
+    const f = kwCustomExpansionsFile.files && kwCustomExpansionsFile.files[0];
+    if (!f) return;
+    const done = (text) => {
+      kwCustomExpansions.value = text;
+      saveKwSettings().catch(() => {});
+      kwCustomExpansionsFile.value = "";
+    };
+    if (typeof f.text === "function") {
+      f.text().then(done).catch(() => {
+        kwCustomExpansionsFile.value = "";
+      });
+      return;
+    }
+    const reader = new FileReader();
+    reader.onload = () => done(String(reader.result || ""));
+    reader.onerror = () => {
+      kwCustomExpansionsFile.value = "";
+    };
+    reader.readAsText(f, "UTF-8");
+  });
+}
+
+// ── Keyword suggestions engine ──
+const KW_RELATED = {
+  "python": ["pandas", "numpy", "scipy", "flask", "django", "fastapi", "jupyter"],
+  "pytorch": ["tensorflow", "keras", "deep learning", "neural networks", "cuda", "torchvision"],
+  "tensorflow": ["pytorch", "keras", "deep learning", "neural networks", "tflite"],
+  "keras": ["tensorflow", "pytorch", "deep learning", "neural networks"],
+  "machine learning": ["deep learning", "scikit-learn", "xgboost", "random forest", "NLP", "computer vision"],
+  "deep learning": ["pytorch", "tensorflow", "keras", "CNN", "RNN", "transformer"],
+  "nlp": ["spacy", "BERT", "GPT", "huggingface", "transformers", "text mining", "sentiment analysis"],
+  "aws": ["EC2", "S3", "Lambda", "CloudFormation", "SageMaker", "EKS", "cloud"],
+  "azure": ["Azure DevOps", "AKS", "Azure Functions", "cloud", "Microsoft"],
+  "gcp": ["BigQuery", "GKE", "Cloud Functions", "Vertex AI", "cloud"],
+  "cloud": ["AWS", "Azure", "GCP", "Kubernetes", "Docker", "Terraform"],
+  "docker": ["Kubernetes", "container", "Docker Compose", "Podman", "CI/CD"],
+  "kubernetes": ["Docker", "Helm", "EKS", "AKS", "GKE", "K8s"],
+  "jenkins": ["GitHub Actions", "GitLab CI", "CI/CD", "CircleCI", "Terraform"],
+  "github actions": ["Jenkins", "GitLab CI", "CI/CD", "CircleCI"],
+  "gitlab": ["GitLab CI", "GitHub Actions", "Jenkins", "CI/CD", "Git"],
+  "git": ["GitHub", "GitLab", "Bitbucket", "version control"],
+  "ci/cd": ["Jenkins", "GitHub Actions", "GitLab CI", "ArgoCD", "Terraform"],
+  "terraform": ["Ansible", "CloudFormation", "Pulumi", "IaC", "infrastructure"],
+  "react": ["Next.js", "Redux", "TypeScript", "JavaScript", "Vue", "Angular"],
+  "angular": ["TypeScript", "RxJS", "JavaScript", "React", "Vue"],
+  "vue": ["Nuxt.js", "Vuex", "JavaScript", "React", "Angular"],
+  "javascript": ["TypeScript", "Node.js", "React", "Vue", "Angular"],
+  "typescript": ["JavaScript", "Node.js", "React", "Angular"],
+  "node.js": ["Express", "NestJS", "JavaScript", "TypeScript", "npm"],
+  "java": ["Spring Boot", "Maven", "Gradle", "Hibernate", "JUnit", "microservices"],
+  "spring boot": ["Java", "microservices", "REST API", "Hibernate", "Maven"],
+  "sql": ["PostgreSQL", "MySQL", "SQL Server", "database", "NoSQL"],
+  "postgresql": ["SQL", "database", "MySQL", "pgAdmin"],
+  "mongodb": ["NoSQL", "Mongoose", "database", "Redis"],
+  "redis": ["caching", "MongoDB", "Memcached", "database"],
+  "elasticsearch": ["Kibana", "Logstash", "ELK", "search", "Solr"],
+  "kafka": ["event streaming", "RabbitMQ", "Spark", "data pipeline"],
+  "spark": ["Hadoop", "data engineering", "PySpark", "Kafka", "Databricks"],
+  "hadoop": ["Spark", "HDFS", "MapReduce", "data engineering", "Hive"],
+  "r&d": ["research", "innovation", "patents", "product development"],
+  "iso 45001": ["ISO 9001", "ISO 14001", "OHSMS", "NEBOSH", "safety management"],
+  "iso 9001": ["ISO 45001", "ISO 14001", "quality management", "QMS"],
+  "nebosh": ["IOSH", "ISO 45001", "safety", "OSHA", "risk assessment"],
+  "phd": ["research", "thesis", "publications", "doctorate"],
+  "agile": ["Scrum", "Kanban", "JIRA", "sprint", "product owner"],
+  "scrum": ["Agile", "Kanban", "JIRA", "sprint planning"],
+  "jira": ["Agile", "Scrum", "Confluence", "Kanban", "project management"],
+  "figma": ["Sketch", "Adobe XD", "UI/UX", "design", "prototyping"],
+  "data science": ["machine learning", "statistics", "Python", "R", "pandas", "visualization"],
+  "devops": ["CI/CD", "Docker", "Kubernetes", "Terraform", "Jenkins", "monitoring"],
+  "cybersecurity": ["penetration testing", "SIEM", "SOC", "firewall", "encryption"],
+  "golang": ["Go", "microservices", "concurrency", "gRPC"],
+  "rust": ["systems programming", "WebAssembly", "memory safety"],
+  "c++": ["C", "systems programming", "embedded", "Qt", "game development"],
+};
+
+const kwSuggestionsBox = document.getElementById("kwSuggestionsBox");
+let kwSuggestActiveIdx = -1;
+
+function getLastToken(textarea) {
+  const val = textarea.value || "";
+  const cursor = textarea.selectionStart || val.length;
+  const before = val.slice(0, cursor);
+  const lastComma = before.lastIndexOf(",");
+  return before.slice(lastComma + 1).trim().toLowerCase();
+}
+
+function getExistingKeywords(textarea) {
+  return (textarea.value || "").split(/[,;\n]+/).map(s => s.trim().toLowerCase()).filter(Boolean);
+}
+
+function showKwSuggestions() {
+  const token = getLastToken(kwInput);
+  kwSuggestionsBox.innerHTML = "";
+  kwSuggestActiveIdx = -1;
+  if (!token || token.length < 2) {
+    kwSuggestionsBox.classList.remove("visible");
+    return;
+  }
+  const existing = new Set(getExistingKeywords(kwInput));
+  const suggestions = [];
+  const seen = new Set();
+
+  for (const [key, related] of Object.entries(KW_RELATED)) {
+    if (key.startsWith(token) || key.includes(token)) {
+      if (!existing.has(key) && !seen.has(key)) {
+        suggestions.push({ text: key, reason: "match" });
+        seen.add(key);
+      }
+      for (const r of related) {
+        const rl = r.toLowerCase();
+        if (!existing.has(rl) && !seen.has(rl)) {
+          suggestions.push({ text: r, reason: "related to " + key });
+          seen.add(rl);
+        }
+      }
+    }
+  }
+
+  for (const [key, related] of Object.entries(KW_RELATED)) {
+    for (const r of related) {
+      if (r.toLowerCase().startsWith(token) || r.toLowerCase().includes(token)) {
+        if (!existing.has(key) && !seen.has(key)) {
+          suggestions.push({ text: key, reason: "has " + r });
+          seen.add(key);
+        }
+      }
+    }
+  }
+
+  if (!suggestions.length) {
+    kwSuggestionsBox.classList.remove("visible");
+    return;
+  }
+
+  const show = suggestions.slice(0, 12);
+  for (let i = 0; i < show.length; i++) {
+    const sg = show[i];
+    const div = document.createElement("div");
+    div.className = "kw-suggestion";
+    div.dataset.idx = String(i);
+    div.innerHTML = `<span class="sg-plus">+</span> <span>${sg.text}</span> <span class="sg-label">${sg.reason}</span>`;
+    div.addEventListener("mousedown", (e) => {
+      e.preventDefault();
+      insertSuggestion(sg.text);
+    });
+    kwSuggestionsBox.appendChild(div);
+  }
+  kwSuggestionsBox.classList.add("visible");
+}
+
+function insertSuggestion(text) {
+  const val = kwInput.value || "";
+  const cursor = kwInput.selectionStart || val.length;
+  const before = val.slice(0, cursor);
+  const after = val.slice(cursor);
+  const lastComma = before.lastIndexOf(",");
+  const prefix = lastComma >= 0 ? before.slice(0, lastComma + 1) + " " : "";
+  kwInput.value = prefix + text + ", " + after.trimStart();
+  kwInput.focus();
+  const newPos = (prefix + text + ", ").length;
+  kwInput.selectionStart = kwInput.selectionEnd = newPos;
+  kwSuggestionsBox.classList.remove("visible");
+  saveKwSettings().catch(() => {});
+  setTimeout(showKwSuggestions, 50);
+}
+
+kwInput.addEventListener("input", showKwSuggestions);
+kwInput.addEventListener("keydown", (e) => {
+  if (!kwSuggestionsBox.classList.contains("visible")) return;
+  const items = kwSuggestionsBox.querySelectorAll(".kw-suggestion");
+  if (!items.length) return;
+
+  if (e.key === "ArrowDown") {
+    e.preventDefault();
+    kwSuggestActiveIdx = Math.min(kwSuggestActiveIdx + 1, items.length - 1);
+    items.forEach((el, i) => el.classList.toggle("active", i === kwSuggestActiveIdx));
+  } else if (e.key === "ArrowUp") {
+    e.preventDefault();
+    kwSuggestActiveIdx = Math.max(kwSuggestActiveIdx - 1, 0);
+    items.forEach((el, i) => el.classList.toggle("active", i === kwSuggestActiveIdx));
+  } else if ((e.key === "Enter" || e.key === "Tab") && kwSuggestActiveIdx >= 0) {
+    e.preventDefault();
+    const text = items[kwSuggestActiveIdx]?.querySelector("span:nth-child(2)")?.textContent;
+    if (text) insertSuggestion(text);
+  } else if (e.key === "Escape") {
+    kwSuggestionsBox.classList.remove("visible");
+  }
+});
+
+kwInput.addEventListener("blur", () => {
+  setTimeout(() => kwSuggestionsBox.classList.remove("visible"), 150);
 });
 
 function kwLog(icon, msg) {
@@ -556,7 +765,7 @@ loadKwSettings().catch(() => {});
 async function ensureKeywordCore(tabId) {
   await chrome.scripting.executeScript({
     target: { tabId, allFrames: false },
-    files: ["keyword-triage-core.js"],
+    files: ["sr-list-autoscroll.js", "keyword-triage-core.js"],
   });
 }
 

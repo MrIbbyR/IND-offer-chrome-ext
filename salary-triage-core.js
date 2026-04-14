@@ -1489,7 +1489,7 @@
     }
   }
 
-  function startQueueFromPage(config) {
+  async function startQueueFromPage(config) {
     const doc = document;
     const win = window;
     const log = [];
@@ -1518,6 +1518,28 @@
       results: [],
       startedAt: Date.now(),
     };
+
+    if (typeof globalThis.__srAutoscrollApplicantListUntilLoaded === "function") {
+      try {
+        const si = await globalThis.__srAutoscrollApplicantListUntilLoaded();
+        if (si && !si.skipped) {
+          log.push({
+            ok: true,
+            msg:
+              "Autoscrolled applicant list — " +
+              si.uniqueLinks +
+              " profile link(s)" +
+              (si.expectedTotal != null ? " (list total " + si.expectedTotal + ")" : "") +
+              (si.timedOut ? ", stopped at time cap" : "") +
+              " in " +
+              Math.round(si.ms || 0) +
+              "ms",
+          });
+        }
+      } catch (e) {
+        log.push({ ok: false, msg: "Autoscroll failed: " + ((e && e.message) || String(e)) });
+      }
+    }
 
     const urls = harvestProfileUrls(doc, win);
     if (urls.length) {

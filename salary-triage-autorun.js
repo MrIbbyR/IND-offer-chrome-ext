@@ -126,6 +126,12 @@
 
     await sleep(300);
 
+    if (typeof globalThis.__srAutoscrollApplicantListUntilLoaded === "function") {
+      try {
+        await globalThis.__srAutoscrollApplicantListUntilLoaded();
+      } catch (_) {}
+    }
+
     const collect = globalThis.__srCollectApplicantClickTargets;
     if (typeof collect !== "function") {
       showToast("Cost assist: extension core missing — reload extension.");

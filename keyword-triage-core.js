@@ -147,14 +147,66 @@
     return cleaned;
   }
 
-  function expandKeywords(keywords) {
+  /** Same format as Python keyword_expansions.txt: abbr|synonym1, synonym2 (# line comments ok) */
+  function parseCustomExpansionsBlock(text) {
+    var extra = {};
+    if (!text || !String(text).trim()) return extra;
+    var lines = String(text).split(/\n/);
+    for (var i = 0; i < lines.length; i++) {
+      var line = lines[i].trim();
+      if (!line || line.charAt(0) === "#") continue;
+      var pipe = line.indexOf("|");
+      if (pipe < 0) continue;
+      var abbr = line.slice(0, pipe).trim().toLowerCase();
+      var rest = line.slice(pipe + 1);
+      if (!abbr) continue;
+      var parts = rest.split(/[,;]+/);
+      for (var j = 0; j < parts.length; j++) {
+        var form = parts[j].trim();
+        if (!form) continue;
+        if (!extra[abbr]) extra[abbr] = [];
+        extra[abbr].push(form);
+      }
+    }
+    return extra;
+  }
+
+  function buildExpansionTable(customBlock) {
+    var table = {};
+    for (var k in KEYWORD_EXPANSIONS) {
+      if (Object.prototype.hasOwnProperty.call(KEYWORD_EXPANSIONS, k)) {
+        table[k] = KEYWORD_EXPANSIONS[k].slice();
+      }
+    }
+    var custom = parseCustomExpansionsBlock(customBlock);
+    for (var abbr in custom) {
+      if (!Object.prototype.hasOwnProperty.call(custom, abbr)) continue;
+      if (!table[abbr]) table[abbr] = [];
+      for (var i = 0; i < custom[abbr].length; i++) {
+        var f = custom[abbr][i];
+        var fl = String(f).toLowerCase();
+        var dup = false;
+        for (var j = 0; j < table[abbr].length; j++) {
+          if (String(table[abbr][j]).toLowerCase() === fl) {
+            dup = true;
+            break;
+          }
+        }
+        if (!dup) table[abbr].push(f);
+      }
+    }
+    return table;
+  }
+
+  function expandKeywords(keywords, expansionTable) {
+    expansionTable = expansionTable || buildExpansionTable("");
     var expanded = keywords.slice();
     var expandedLower = {};
     for (var i = 0; i < expanded.length; i++) expandedLower[expanded[i].toLowerCase()] = true;
     for (var k = 0; k < keywords.length; k++) {
       var key = (keywords[k] || "").trim().toLowerCase();
       if (!key) continue;
-      var forms = KEYWORD_EXPANSIONS[key];
+      var forms = expansionTable[key];
       if (!forms) continue;
       for (var f = 0; f < forms.length; f++) {
         if (!expandedLower[forms[f].toLowerCase()]) {
@@ -166,10 +218,22 @@
     return expanded;
   }
 
-  function resolveKeywords(rawInput) {
+  function countCustomExpansionRules(text) {
+    if (!text || !String(text).trim()) return 0;
+    var n = 0;
+    var lines = String(text).split(/\n/);
+    for (var i = 0; i < lines.length; i++) {
+      var line = lines[i].trim();
+      if (line && line.charAt(0) !== "#" && line.indexOf("|") >= 0) n++;
+    }
+    return n;
+  }
+
+  function resolveKeywords(rawInput, customExpansionsText) {
+    var table = buildExpansionTable(customExpansionsText || "");
     var parsed = parseKeywordsFromString(rawInput);
     var canon = canonicalizeKeywords(parsed);
-    var expanded = expandKeywords(canon);
+    var expanded = expandKeywords(canon, table);
     return canonicalizeKeywords(expanded);
   }
 
@@ -177,6 +241,10 @@
 
   function normalizeForKw(s) {
     if (!s) return "";
+    s = String(s);
+    try {
+      if (typeof s.normalize === "function") s = s.normalize("NFKC");
+    } catch (_) {}
     s = s.replace(/[\u200B-\u200D\uFEFF]/g, "");
     s = s.replace(/\u00A0/g, " ").replace(/\u202F/g, " ").replace(/\u2007/g, " ");
     s = s.replace(/\s+/g, " ");
@@ -240,42 +308,90 @@
 
   /* ── Keyword matching (ported from req.py find_keyword_hits) ── */
 
-  function sepFlexiblePattern(kwNorm) {
+  function sepFlexiblePatternSource(kwNorm) {
     var tokens = kwNorm.match(/[A-Za-z]+|\d+/g);
-    if (!tokens || !tokens.length) return null;
+    if (!tokens || !tokens.length) return "";
     var mid = "[\\W_]*";
-    var body = tokens.map(function (t) {
-      return t.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-    }).join(mid);
-    if (!body) return null;
-    return new RegExp("(?<![A-Za-z0-9])" + body + "(?![A-Za-z0-9])", "gi");
+    var body = tokens
+      .map(function (t) {
+        return t.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+      })
+      .join(mid);
+    if (!body) return "";
+    return "(?<![A-Za-z0-9])" + body + "(?![A-Za-z0-9])";
   }
 
-  function findKeywordHits(allText, keywords) {
-    var hay = normalizeForKw(allText || "");
+  /** ISO list heuristic: "ISO Standard (9001, 45001)" matches keyword "ISO 45001" */
+  function isoListHit(hay, num) {
+    if (!num) return false;
+    var numRx;
+    try {
+      var esc = String(num).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+      numRx = new RegExp("(?<!\\d)" + esc + "(?!\\d)", "i");
+    } catch (_) {
+      return false;
+    }
+    var chunks = hay.split(/[\n•]+/);
+    for (var i = 0; i < chunks.length; i++) {
+      var ch = chunks[i];
+      if (/\bISO\b/i.test(ch) && numRx.test(ch)) return true;
+    }
+    return false;
+  }
+
+  /**
+   * @param {string|string[]} texts - haystack(s); joined with space then normalized (Python join)
+   * @param {string[]} keywords
+   * @param {{ maxItems?: number }} opts
+   */
+  function findKeywordHits(texts, keywords, opts) {
+    opts = opts || {};
+    var maxItems = Math.min(200, Math.max(1, parseInt(opts.maxItems, 10) || 50));
+    var joined =
+      typeof texts === "string"
+        ? texts
+        : Array.isArray(texts)
+          ? texts.filter(Boolean).join(" ")
+          : "";
+    var hay = normalizeForKw(joined);
     if (!hay) return { hits: [], hitCount: 0 };
-    var hayLower = hay.toLowerCase();
     var found = [];
     var seenLower = {};
 
     for (var i = 0; i < keywords.length; i++) {
+      if (found.length >= maxItems) break;
       var kwDisp = (keywords[i] || "").trim();
       if (!kwDisp) continue;
       var kwKey = kwDisp;
       if (kwKey.charAt(0) === "(" && kwKey.charAt(kwKey.length - 1) === ")") {
-        var inner = kwKey.slice(1, -1).trim();
-        if (inner) kwKey = inner;
+        var inner2 = kwKey.slice(1, -1).trim();
+        if (inner2) kwKey = inner2;
       }
       var kwNorm = normalizeForKw(kwKey);
       if (!kwNorm) continue;
       var count = 0;
-      var rx = sepFlexiblePattern(kwNorm);
-      if (rx) {
-        var matches = hay.match(rx);
-        count = matches ? matches.length : 0;
+      var src = sepFlexiblePatternSource(kwNorm);
+      if (src) {
+        try {
+          var rx = new RegExp(src, "gi");
+          var m = hay.match(rx);
+          count = m ? m.length : 0;
+        } catch (_) {
+          count = 0;
+        }
       }
       if (count === 0) {
-        if (hayLower.indexOf(kwNorm.toLowerCase()) >= 0) count = 1;
+        var toks = kwNorm.match(/[A-Za-z]+|\d+/g);
+        if (toks && toks.length && toks[0].toLowerCase() === "iso") {
+          var num = "";
+          for (var t = 1; t < toks.length; t++) {
+            if (/^\d+$/.test(toks[t])) {
+              num = toks[t];
+              break;
+            }
+          }
+          if (num && isoListHit(hay, num)) count = 1;
+        }
       }
       if (count > 0) {
         var key = kwDisp.toLowerCase();
@@ -584,6 +700,404 @@
     }
   }
 
+  /* ── Post keyword hits to the Notes tab on the prospect profile ── */
+
+  /* ── Notes helpers ── */
+
+  function findNotesTab(doc, win) {
+    var root = doc.body || doc.documentElement;
+    var candidates = [];
+    try { candidates = candidates.concat(Array.from(doc.querySelectorAll("a > spl-tab-label > div"))); } catch (_) {}
+    try { candidates = candidates.concat(Array.from(doc.querySelectorAll("a > spl-tab-label"))); } catch (_) {}
+    try { candidates = candidates.concat(Array.from(doc.querySelectorAll('[role="tab"]'))); } catch (_) {}
+    try { candidates = candidates.concat(queryDeepSelectorAll(root, win, "spl-tab-label")); } catch (_) {}
+    for (var i = 0; i < candidates.length; i++) {
+      var el = candidates[i];
+      var txt = ((el.textContent || el.innerText || "") + "").replace(/\s+/g, " ").trim().toLowerCase();
+      if (/^notes\b/.test(txt)) {
+        var clickTarget = el;
+        try {
+          var parentA = el.closest && el.closest("a");
+          if (parentA) clickTarget = parentA;
+        } catch (_) {}
+        return clickTarget;
+      }
+    }
+    return null;
+  }
+
+  /**
+   * Walk shadow DOMs to find every textarea visible in the page.
+   * SmartRecruiters wraps Notes in spl-form-element → shadowRoot → div → textarea.
+   */
+  function findAllDeepTextareas(root, win) {
+    var out = [];
+    var visited = new Set();
+    function walk(node) {
+      if (!node || visited.has(node)) return;
+      visited.add(node);
+      if (node.nodeType === 1) {
+        var tag = (node.tagName || "").toLowerCase();
+        if (tag === "textarea") { out.push(node); return; }
+        if (node.matches) {
+          try {
+            if (node.matches('[contenteditable="true"], div[role="textbox"]')) out.push(node);
+          } catch (_) {}
+        }
+      }
+      if (node.shadowRoot) walk(node.shadowRoot);
+      if (node.childNodes) {
+        for (var i = 0; i < node.childNodes.length; i++) walk(node.childNodes[i]);
+      }
+    }
+    walk(root);
+    return out.filter(function (el) { return isVisible(el, win); });
+  }
+
+  function getNotesSection(doc) {
+    var sec = null;
+    try { sec = doc.querySelector("#st-notes"); } catch (_) {}
+    if (!sec) try { sec = doc.querySelector('[data-test="notes"]'); } catch (_) {}
+    if (!sec) try { sec = doc.querySelector("sr-notes"); } catch (_) {}
+    if (!sec) try { sec = doc.querySelector("app-notes"); } catch (_) {}
+    if (!sec) try { sec = findElementByIdDeep(doc.documentElement || doc.body, "st-notes"); } catch (_) {}
+    return sec;
+  }
+
+  function findNotesInput(doc, win) {
+    var notesSection = getNotesSection(doc);
+    if (notesSection) {
+      var inSection = findAllDeepTextareas(notesSection, win);
+      if (inSection.length) return inSection[0];
+    }
+    var all = findAllDeepTextareas(doc.body || doc.documentElement, win);
+    return all.length ? all[0] : null;
+  }
+
+  /**
+   * Walk shadow DOMs to find every spl-button / button visible.
+   */
+  function findAllDeepButtons(root, win) {
+    var out = [];
+    var visited = new Set();
+    function walk(node) {
+      if (!node || visited.has(node)) return;
+      visited.add(node);
+      if (node.nodeType === 1) {
+        var tag = (node.tagName || "").toLowerCase();
+        if (tag === "spl-button" || tag === "button") out.push(node);
+        if (node.matches) {
+          try { if (node.matches('[role="button"]')) out.push(node); } catch (_) {}
+        }
+      }
+      if (node.shadowRoot) walk(node.shadowRoot);
+      if (node.childNodes) {
+        for (var i = 0; i < node.childNodes.length; i++) walk(node.childNodes[i]);
+      }
+    }
+    walk(root);
+    return out.filter(function (el, idx, a) { return a.indexOf(el) === idx; });
+  }
+
+  function getDeepText(el) {
+    var t = "";
+    try { t = (el.textContent || el.innerText || "").replace(/\s+/g, " ").trim(); } catch (_) {}
+    if (!t && el.shadowRoot) {
+      try { t = (el.shadowRoot.textContent || "").replace(/\s+/g, " ").trim(); } catch (_) {}
+    }
+    return t.toLowerCase();
+  }
+
+  function findNotesPostButton(doc, win) {
+    for (var idx = 0; idx <= 5; idx++) {
+      try {
+        var allBtns = doc.querySelectorAll("#spl-form-element_" + idx + " > div > div > spl-button");
+        for (var b = 0; b < allBtns.length; b++) {
+          var btn = allBtns[b];
+          if (!isVisible(btn, win)) continue;
+          if (btn.closest && btn.closest("spl-dropdown")) continue;
+          var txt = getDeepText(btn);
+          if (/post|save|submit/i.test(txt)) return btn;
+        }
+      } catch (_) {}
+    }
+    for (var idx2 = 0; idx2 <= 5; idx2++) {
+      try {
+        var allBtns2 = doc.querySelectorAll("#spl-form-element_" + idx2 + " spl-button");
+        for (var b2 = 0; b2 < allBtns2.length; b2++) {
+          if (!isVisible(allBtns2[b2], win)) continue;
+          if (allBtns2[b2].closest && allBtns2[b2].closest("spl-dropdown")) continue;
+          var txt2 = getDeepText(allBtns2[b2]);
+          if (/post|save|submit/i.test(txt2)) return allBtns2[b2];
+        }
+      } catch (_) {}
+    }
+    var notesSection = getNotesSection(doc);
+    var searchRoot = notesSection || doc.body || doc.documentElement;
+    var deepBtns = findAllDeepButtons(searchRoot, win);
+    for (var i = 0; i < deepBtns.length; i++) {
+      if (isDisabledish(deepBtns[i])) continue;
+      if (deepBtns[i].closest && deepBtns[i].closest("spl-dropdown")) continue;
+      var dtxt = getDeepText(deepBtns[i]);
+      if (/^post$/i.test(dtxt)) return deepBtns[i];
+    }
+    return null;
+  }
+
+  function formatNoteText(hitLabels, hitCount, totalKeywords) {
+    return hitLabels.join(", ") + " - Matched " + hitCount + "/" + totalKeywords;
+  }
+
+  /**
+   * Set the value on a textarea/input/contenteditable and fire all events
+   * that Angular/React/Web Component bindings listen to.
+   */
+  function setNativeInputValue(el, value) {
+    try { el.focus(); } catch (_) {}
+    var tag = (el.tagName || "").toLowerCase();
+    if (tag === "textarea" || tag === "input") {
+      try {
+        var proto = tag === "textarea" ? HTMLTextAreaElement.prototype : HTMLInputElement.prototype;
+        var nativeSetter = Object.getOwnPropertyDescriptor(proto, "value");
+        if (nativeSetter && nativeSetter.set) {
+          nativeSetter.set.call(el, value);
+        } else {
+          el.value = value;
+        }
+      } catch (_) {
+        el.value = value;
+      }
+      try { el.dispatchEvent(new Event("input", { bubbles: true, composed: true })); } catch (_) {}
+      try { el.dispatchEvent(new Event("change", { bubbles: true, composed: true })); } catch (_) {}
+      try { el.dispatchEvent(new KeyboardEvent("keyup", { bubbles: true, composed: true, key: "a" })); } catch (_) {}
+    } else {
+      try { el.textContent = value; } catch (_) {}
+      try { el.innerHTML = value.replace(/\n/g, "<br>"); } catch (_) {}
+      try { el.dispatchEvent(new Event("input", { bubbles: true, composed: true })); } catch (_) {}
+    }
+  }
+
+  /**
+   * Simulate actual keyboard typing — works with frameworks that ignore .value sets.
+   */
+  async function typeIntoElement(el, text, win) {
+    try { el.focus(); } catch (_) {}
+    await sleep(100);
+    for (var i = 0; i < text.length; i++) {
+      var ch = text.charAt(i);
+      var keyCode = ch.charCodeAt(0);
+      try {
+        el.dispatchEvent(new KeyboardEvent("keydown", { key: ch, code: "Key" + ch.toUpperCase(), keyCode: keyCode, which: keyCode, bubbles: true, composed: true }));
+        el.dispatchEvent(new KeyboardEvent("keypress", { key: ch, code: "Key" + ch.toUpperCase(), keyCode: keyCode, which: keyCode, bubbles: true, composed: true }));
+        el.dispatchEvent(new InputEvent("input", { data: ch, inputType: "insertText", bubbles: true, composed: true }));
+        el.dispatchEvent(new KeyboardEvent("keyup", { key: ch, code: "Key" + ch.toUpperCase(), keyCode: keyCode, which: keyCode, bubbles: true, composed: true }));
+      } catch (_) {}
+    }
+  }
+
+  function clickSplButton(el, win) {
+    if (!el) return;
+    var target = el;
+    try {
+      if (el.shadowRoot) {
+        var inner = el.shadowRoot.querySelector("button, [role='button']");
+        if (inner) target = inner;
+      }
+    } catch (_) {}
+    try { target.click(); } catch (_) {
+      dispatchClickAtElementCenter(target, win, 0.5);
+    }
+  }
+
+  /**
+   * Try a single click on an element using one specific strategy.
+   * Returns nothing — caller must check if the click had the desired effect.
+   */
+  function singleClick(el, win, strategy) {
+    if (!el) return;
+    try { el.scrollIntoView({ block: "center", behavior: "instant" }); } catch (_) {}
+    if (strategy === "native") {
+      try { el.click(); } catch (_) {}
+    } else if (strategy === "shadow") {
+      var sb = null;
+      try { if (el.shadowRoot) sb = el.shadowRoot.querySelector("button, a, [role='button']"); } catch (_) {}
+      if (sb) { try { sb.click(); } catch (_) {} }
+      else { try { el.click(); } catch (_) {} }
+    } else {
+      dispatchClickAtElementCenter(el, win, 0.5);
+    }
+  }
+
+  /** Check if any dropdown menu is currently visible in the DOM. */
+  function isDropdownMenuOpen(doc) {
+    try {
+      var menus = doc.querySelectorAll("[id^='spl-dropdown-menu']");
+      for (var i = 0; i < menus.length; i++) {
+        var r = menus[i].getBoundingClientRect();
+        if (r.width > 0 && r.height > 0) return true;
+      }
+    } catch (_) {}
+    return false;
+  }
+
+  /** Find the "Note to self" item from any visible dropdown menu. */
+  function findNoteToSelfItem(doc) {
+    var menus = doc.querySelectorAll("[id^='spl-dropdown-menu']");
+    for (var m = 0; m < menus.length; m++) {
+      var items = menus[m].querySelectorAll("spl-dropdown-item");
+      for (var i = 0; i < items.length; i++) {
+        if (/note\s*to\s*self/i.test(getDeepText(items[i]))) return items[i];
+      }
+      if (items.length >= 3) return items[2];
+    }
+    var loose = doc.querySelectorAll("spl-dropdown-item");
+    for (var j = 0; j < loose.length; j++) {
+      if (/note\s*to\s*self/i.test(getDeepText(loose[j]))) return loose[j];
+    }
+    return null;
+  }
+
+  /**
+   * Open the "Open note" dropdown and select "Note to self".
+   * Tries one click strategy at a time, checking if the dropdown opened after each.
+   */
+  async function selectNoteToSelf(doc, win) {
+    var splBtn = null;
+    for (var idx = 0; idx <= 5; idx++) {
+      try {
+        var dd = doc.querySelector("#spl-form-element_" + idx + " spl-dropdown");
+        if (dd && isVisible(dd, win)) {
+          splBtn = dd.querySelector("spl-button");
+          if (splBtn) break;
+        }
+      } catch (_) {}
+    }
+    if (!splBtn) return false;
+
+    var strategies = ["native", "shadow", "dispatch"];
+    for (var s = 0; s < strategies.length; s++) {
+      if (isDropdownMenuOpen(doc)) break;
+      singleClick(splBtn, win, strategies[s]);
+      await sleep(500);
+      if (isDropdownMenuOpen(doc)) break;
+    }
+
+    if (!isDropdownMenuOpen(doc)) return false;
+
+    var noteItem = findNoteToSelfItem(doc);
+    if (!noteItem) {
+      await sleep(400);
+      noteItem = findNoteToSelfItem(doc);
+    }
+    if (!noteItem) return false;
+
+    var inner = null;
+    try { inner = noteItem.querySelector("div > spl-icon"); } catch (_) {}
+    if (!inner) { try { inner = noteItem.querySelector("div > div > spl-typography-body"); } catch (_) {} }
+    if (!inner) { try { inner = noteItem.querySelector("div"); } catch (_) {} }
+
+    var clickEl = inner || noteItem;
+    singleClick(clickEl, win, "dispatch");
+    await sleep(300);
+
+    var triggerText = getDeepText(splBtn);
+    if (/note\s*to\s*self/i.test(triggerText)) return true;
+
+    singleClick(clickEl, win, "native");
+    await sleep(300);
+    triggerText = getDeepText(splBtn);
+    if (/note\s*to\s*self/i.test(triggerText)) return true;
+
+    singleClick(noteItem, win, "dispatch");
+    await sleep(300);
+    return true;
+  }
+
+  /**
+   * Pre-open the Notes tab and select "Note to self" early,
+   * so the input is ready by the time keyword scan finishes.
+   */
+  async function prepareNotesSection(doc, win) {
+    var notesTab = findNotesTab(doc, win);
+    if (!notesTab) return false;
+    try { notesTab.scrollIntoView({ block: "center", behavior: "instant" }); } catch (_) {}
+    await sleep(50);
+    dispatchClickAtElementCenter(notesTab, win, 0.5);
+    try { notesTab.click(); } catch (_) {}
+    await sleep(800);
+    var ok = await selectNoteToSelf(doc, win);
+    return ok;
+  }
+
+  async function postKeywordHitsToNotes(doc, win, hitLabels, hitCount, totalKeywords, log) {
+    var input = findNotesInput(doc, win);
+    if (!input) {
+      var notesTab = findNotesTab(doc, win);
+      if (notesTab) {
+        try { notesTab.scrollIntoView({ block: "center", behavior: "instant" }); } catch (_) {}
+        await sleep(50);
+        dispatchClickAtElementCenter(notesTab, win, 0.5);
+        try { notesTab.click(); } catch (_) {}
+      }
+      for (var wait = 0; wait < 2000; wait += 200) {
+        await sleep(200);
+        input = findNotesInput(doc, win);
+        if (input) break;
+      }
+    }
+    if (!input) {
+      log.push({ ok: false, msg: "Notes text input not found — could not post." });
+      return false;
+    }
+
+    var notesSelfOk = false;
+    for (var idx = 0; idx <= 5; idx++) {
+      try {
+        var dd = doc.querySelector("#spl-form-element_" + idx + " spl-dropdown");
+        if (dd && isVisible(dd, win)) {
+          var ddBtn = dd.querySelector("spl-button");
+          if (ddBtn && /note\s*to\s*self/i.test(getDeepText(ddBtn))) { notesSelfOk = true; break; }
+        }
+      } catch (_) {}
+    }
+    if (!notesSelfOk) {
+      log.push({ ok: true, msg: "Note to self not set — selecting now..." });
+      await selectNoteToSelf(doc, win);
+    }
+
+    var noteText = formatNoteText(hitLabels, hitCount, totalKeywords);
+    setNativeInputValue(input, noteText);
+    await sleep(100);
+
+    var itag = (input.tagName || "").toLowerCase();
+    if (itag === "textarea" || itag === "input") {
+      var curVal = "";
+      try { curVal = input.value || ""; } catch (_) {}
+      if (curVal.indexOf("Matched") < 0) {
+        try { input.value = ""; } catch (_) {}
+        await typeIntoElement(input, noteText, win);
+        await sleep(100);
+      }
+    }
+
+    var postBtn = null;
+    for (var bw = 0; bw < 1500; bw += 200) {
+      postBtn = findNotesPostButton(doc, win);
+      if (postBtn) break;
+      await sleep(200);
+    }
+    if (!postBtn) {
+      log.push({ ok: false, msg: "Notes post button not found — text entered but not submitted." });
+      return false;
+    }
+
+    singleClick(postBtn, win, "shadow");
+
+    log.push({ ok: true, msg: "Posted note to self (" + hitCount + " matches)" });
+    await sleep(300);
+    return true;
+  }
+
   /* ── Core: run keyword triage on a single profile page ── */
 
   async function runKeywordTriageWithDoc(doc, win, config, options) {
@@ -596,9 +1110,11 @@
       return { log: log, moved: false, skipped: true, matchedKeywords: [], hitCount: 0 };
     }
 
-    var keywords = resolveKeywords(config.keywords || "");
+    var customExp = config.customKeywordExpansions || "";
+    var keywords = resolveKeywords(config.keywords || "", customExp);
     var minHits = Math.max(1, parseInt(config.minHits, 10) || 2);
     var dryRun = !!config.dryRun;
+    var postToNotes = !!config.postToNotes;
 
     if (!keywords.length) {
       log.push({ ok: false, msg: "No keywords provided." });
@@ -606,10 +1122,18 @@
     }
 
     log.push({ ok: true, msg: "Keywords (" + keywords.length + "): " + keywords.slice(0, 8).join(", ") + (keywords.length > 8 ? "..." : "") });
+    var nCustom = countCustomExpansionRules(customExp);
+    if (nCustom > 0) {
+      log.push({ ok: true, msg: "Custom abbreviation rules (keyword_expansions style): " + nCustom + " line(s)" });
+    }
     log.push({ ok: true, msg: "Min hits to move forward: " + minHits });
 
     var resumeWaitMs = Math.max(1500, parseInt(config.resumeWaitMs, 10) || 3000);
     await sleep(resumeWaitMs);
+
+    if (postToNotes) {
+      try { await prepareNotesSection(doc, win); } catch (_) {}
+    }
 
     var resumeText = "";
     try { resumeText = getResumeText(doc); } catch (e) {
@@ -634,16 +1158,25 @@
 
     log.push({ ok: true, msg: "Matched " + result.hitCount + "/" + keywords.length + " keywords: " + (hitLabels.length ? hitLabels.join(", ") : "(none)") });
 
+    var notesPosted = false;
+    if (postToNotes && result.hitCount > 0) {
+      try {
+        notesPosted = await postKeywordHitsToNotes(doc, win, hitLabels, result.hitCount, keywords.length, log);
+      } catch (e) {
+        log.push({ ok: false, msg: "Notes post error: " + ((e && e.message) || String(e)) });
+      }
+    }
+
     if (result.hitCount < minHits) {
       log.push({ ok: false, msg: "Below threshold (" + result.hitCount + " < " + minHits + ") — skip" });
-      return { log: log, moved: false, skipped: false, matchedKeywords: hitLabels, hitCount: result.hitCount };
+      return { log: log, moved: false, skipped: false, matchedKeywords: hitLabels, hitCount: result.hitCount, notesPosted: notesPosted };
     }
 
     log.push({ ok: true, msg: "Meets threshold — proceeding to Move forward" });
 
     if (dryRun) {
       log.push({ ok: true, msg: "Dry run: would click Move forward (skipped)" });
-      return { log: log, moved: false, skipped: false, matchedKeywords: hitLabels, hitCount: result.hitCount };
+      return { log: log, moved: false, skipped: false, matchedKeywords: hitLabels, hitCount: result.hitCount, notesPosted: notesPosted };
     }
 
     var moveReadyMs = Math.max(800, parseInt(config.moveButtonReadyMs, 10) || 4500);
@@ -660,11 +1193,11 @@
 
     if (!moveCtrl || !moveCtrl.btn) {
       log.push({ ok: false, msg: "Move forward button not found." });
-      return { log: log, moved: false, skipped: false, matchedKeywords: hitLabels, hitCount: result.hitCount };
+      return { log: log, moved: false, skipped: false, matchedKeywords: hitLabels, hitCount: result.hitCount, notesPosted: notesPosted };
     }
     if (isDisabledish(moveCtrl.btn)) {
       log.push({ ok: false, msg: "Move forward appears disabled — skipped." });
-      return { log: log, moved: false, skipped: false, matchedKeywords: hitLabels, hitCount: result.hitCount };
+      return { log: log, moved: false, skipped: false, matchedKeywords: hitLabels, hitCount: result.hitCount, notesPosted: notesPosted };
     }
 
     try { moveCtrl.btn.scrollIntoView({ block: "center", behavior: "instant" }); } catch (_) {}
@@ -675,7 +1208,7 @@
     log.push({ ok: true, msg: "Clicked Move forward" });
     await sleep(moveSettleMs);
 
-    return { log: log, moved: true, skipped: false, matchedKeywords: hitLabels, hitCount: result.hitCount };
+    return { log: log, moved: true, skipped: false, matchedKeywords: hitLabels, hitCount: result.hitCount, notesPosted: notesPosted };
   }
 
   async function runKeywordTriageMultiFrame(config) {
@@ -711,7 +1244,7 @@
 
   /* ── Queue bootstrap ── */
 
-  function startQueueFromPage(config) {
+  async function startQueueFromPage(config) {
     var doc = document;
     var win = window;
     var log = [];
@@ -726,8 +1259,10 @@
       initialDelayMs: Math.max(400, resumeWaitMs),
       config: {
         keywords: config.keywords,
+        customKeywordExpansions: config.customKeywordExpansions || "",
         minHits: config.minHits,
         dryRun: config.dryRun,
+        postToNotes: !!config.postToNotes,
         resumeWaitMs: resumeWaitMs,
         moveSettleMs: moveSettleMs,
         afterMoveNavigateMs: afterMoveNavigateMs,
@@ -738,6 +1273,28 @@
       results: [],
       startedAt: Date.now(),
     };
+
+    if (typeof globalThis.__srAutoscrollApplicantListUntilLoaded === "function") {
+      try {
+        var si = await globalThis.__srAutoscrollApplicantListUntilLoaded();
+        if (si && !si.skipped) {
+          log.push({
+            ok: true,
+            msg:
+              "Autoscrolled applicant list — " +
+              si.uniqueLinks +
+              " profile link(s)" +
+              (si.expectedTotal != null ? " (list total " + si.expectedTotal + ")" : "") +
+              (si.timedOut ? ", stopped at time cap" : "") +
+              " in " +
+              Math.round(si.ms || 0) +
+              "ms",
+          });
+        }
+      } catch (e) {
+        log.push({ ok: false, msg: "Autoscroll failed: " + ((e && e.message) || String(e)) });
+      }
+    }
 
     var urls = harvestProfileUrls(doc, win);
     if (urls.length) {

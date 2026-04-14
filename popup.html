@@ -120,6 +120,35 @@
     #panel-keyword .field-hint { color: #d0d8e8; }
     #panel-keyword .salary-check { color: #d0d8e8; }
 
+    /* Keyword suggestions dropdown */
+    #kwSuggestionsBox {
+      display: none;
+      position: absolute;
+      z-index: 9999;
+      background: #1e2330;
+      border: 1px solid #3d5a8a;
+      border-radius: 6px;
+      max-height: 160px;
+      overflow-y: auto;
+      box-shadow: 0 6px 24px rgba(0,0,0,.5);
+      width: calc(100% - 28px);
+      margin-top: 2px;
+    }
+    #kwSuggestionsBox.visible { display: block; }
+    .kw-suggestion {
+      padding: 5px 10px;
+      font-size: 11px;
+      color: #c0c8d8;
+      cursor: pointer;
+      font-family: var(--mono);
+      display: flex;
+      align-items: center;
+      gap: 6px;
+    }
+    .kw-suggestion:hover, .kw-suggestion.active { background: #2a3348; color: #00e5a0; }
+    .kw-suggestion .sg-label { color: #6a7585; font-size: 10px; margin-left: auto; }
+    .kw-suggestion .sg-plus { color: #00e5a0; font-weight: bold; }
+
     /* ── Offer panel (existing) ── */
     .drop-zone {
       margin: 14px 14px 0;
@@ -558,16 +587,30 @@
   <!-- ── Keyword Search ── -->
   <div class="panel" id="panel-keyword">
     <div class="salary-fields">
-      <div class="field-row">
+      <div class="field-row" style="position:relative">
         <label for="kwInput">Keywords (comma-separated)</label>
-        <textarea id="kwInput" rows="3" placeholder="e.g. Python, AWS, Machine Learning, Chennai"></textarea>
-        <div class="field-hint">Abbreviations like ML, AI, NLP auto-expand to full forms</div>
+        <textarea id="kwInput" rows="3" placeholder="e.g. Python, AWS, Machine Learning, Chennai" autocomplete="off"></textarea>
+        <div id="kwSuggestionsBox"></div>
+        <div class="field-hint">Abbreviations like ML, AI, NLP auto-expand to full forms &middot; type to see related suggestions</div>
+      </div>
+      <div class="field-row">
+        <label for="kwCustomExpansions">Custom expansions (optional)</label>
+        <textarea id="kwCustomExpansions" rows="4" placeholder="Same as keyword_expansions.txt — one rule per line:&#10;abbr|full form 1, full form 2&#10;# lines starting with # are ignored"></textarea>
+        <div class="field-hint">Merged with built-in rules. Example: <code style="font-size:11px">nebosh|NEBOSH IGC, international general certificate</code></div>
+        <label class="salary-check" style="margin-top:8px">
+          <span style="margin-right:8px">Load from .txt</span>
+          <input type="file" id="kwCustomExpansionsFile" accept=".txt,text/plain" />
+        </label>
       </div>
       <div class="field-row">
         <label for="kwMinHits">Min keywords to match</label>
         <input type="number" id="kwMinHits" placeholder="2" min="1" step="1" />
         <div class="field-hint">Move forward only if at least this many keywords are found</div>
       </div>
+      <label class="salary-check">
+        <input type="checkbox" id="kwPostToNotes" checked />
+        Post keyword hits to Notes on profile
+      </label>
       <label class="salary-check">
         <input type="checkbox" id="kwDryRun" />
         Dry run (scan keywords only, never click Move)
