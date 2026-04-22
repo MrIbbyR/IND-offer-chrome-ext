@@ -22,8 +22,37 @@
     "nebsh": ["nebsh igc", "international general certificate"],
     "ctf": ["capture the flag", "capture-the-flag"],
     "aws": ["amazon web services"],
+    "amazon web services": ["aws"],
     "gcp": ["google cloud platform", "google cloud"],
     "api": ["application programming interface", "apis"],
+    "tensorflow": ["tensor flow", "tensor-flow"],
+    "pytorch": ["py torch", "py-torch"],
+    "azure": ["microsoft azure", "ms azure"],
+    "kubernetes": ["k8s"],
+    "k8s": ["kubernetes"],
+    "scikit-learn": ["scikit learn", "sklearn", "sk-learn"],
+    "sklearn": ["scikit-learn", "scikit learn"],
+    "opencv": ["open cv", "open-cv"],
+    "fastapi": ["fast api", "fast-api"],
+    "nodejs": ["node js", "node.js", "node-js"],
+    "node.js": ["nodejs", "node js", "node-js"],
+    "devops": ["dev ops", "dev-ops"],
+    "github": ["git hub", "git-hub"],
+    "gitlab": ["git lab", "git-lab"],
+    "chatgpt": ["chat gpt", "chat-gpt"],
+    "openai": ["open ai", "open-ai"],
+    "huggingface": ["hugging face", "hugging-face"],
+    "hugging face": ["huggingface"],
+    "langchain": ["lang chain", "lang-chain"],
+    "powerbi": ["power bi", "power-bi"],
+    "power bi": ["powerbi"],
+    "tableau": [],
+    "mongodb": ["mongo db", "mongo-db"],
+    "postgresql": ["postgres", "postgre sql"],
+    "postgres": ["postgresql"],
+    "mysql": ["my sql", "my-sql"],
+    "nosql": ["no sql", "no-sql"],
+    "graphql": ["graph ql", "graph-ql"],
   };
 
   var MOVE_FORWARD_ID = "st-moveForward";
@@ -32,6 +61,17 @@
 
   function sleep(ms) {
     return new Promise(function (r) { setTimeout(r, ms); });
+  }
+
+  /** Randomized delay — returns ms ± ~35% spread to avoid fixed-cadence bot detection. */
+  function jitter(baseMs) {
+    var lo = Math.round(baseMs * 0.65);
+    var hi = Math.round(baseMs * 1.35);
+    return lo + Math.floor(Math.random() * (hi - lo + 1));
+  }
+
+  function sleepJitter(baseMs) {
+    return sleep(jitter(baseMs));
   }
 
   function isVisible(el, win) {
@@ -251,27 +291,232 @@
     return s.trim();
   }
 
-  /* ── Resume text extraction from DOM (ported from req.py get_dom_resume_text) ── */
+  /* ── Ensure the Resume sub-tab is active before extraction ── */
+
+  async function ensureResumeTabActive(doc, win) {
+    var root = doc.body || doc.documentElement;
+
+    // Strategy 1: Look for the Profile/Resume toggle buttons near the resume viewer
+    // These are typically button elements or spl-button elements in a toggle group
+    var candidates = [];
+    try { candidates = candidates.concat(Array.from(doc.querySelectorAll('button[role="tab"], [role="tab"]'))); } catch (_) {}
+    try { candidates = candidates.concat(queryDeepSelectorAll(root, win, "spl-button")); } catch (_) {}
+    try { candidates = candidates.concat(Array.from(doc.querySelectorAll("button"))); } catch (_) {}
+
+    for (var i = 0; i < candidates.length; i++) {
+      var el = candidates[i];
+      var txt = ((el.textContent || el.innerText || "") + "").replace(/\s+/g, " ").trim();
+      if (!/^\s*Resume\s*$/i.test(txt)) continue;
+
+      // Avoid clicking sidebar links (Attachments > Resume) — only click tab/toggle buttons
+      var tag = (el.tagName || "").toLowerCase();
+      var role = "";
+      try { role = (el.getAttribute("role") || ""); } catch (_) {}
+      var isLikelyTab = (tag === "button" || tag === "spl-button" || role === "tab" ||
+        (el.closest && (el.closest('[role="tablist"]') || el.closest(".spl-toggle-group") || el.closest("spl-toggle-group"))));
+      if (!isLikelyTab) continue;
+
+      var clickTarget = el;
+      try { clickTarget.scrollIntoView({ block: "center", behavior: "smooth" }); } catch (_) {}
+      await sleepJitter(80);
+      dispatchClickAtElementCenter(clickTarget, win, 0.3 + Math.random() * 0.4);
+      try { clickTarget.click(); } catch (_) {}
+      await sleepJitter(650);
+      return true;
+    }
+
+    // Strategy 2: broader search for any element that looks like the Resume toggle
+    var links = [];
+    try { links = Array.from(doc.querySelectorAll("a")); } catch (_) {}
+    for (var j = 0; j < links.length; j++) {
+      var aEl = links[j];
+      var aTxt = ((aEl.textContent || aEl.innerText || "") + "").replace(/\s+/g, " ").trim();
+      if (!/^\s*Resume\s*$/i.test(aTxt)) continue;
+      // Only click if it's in a toggle/tab area, not the sidebar Attachments list
+      try {
+        if (aEl.closest && (aEl.closest('[role="tablist"]') || aEl.closest(".spl-toggle-group") || aEl.closest("spl-toggle-group"))) {
+          try { aEl.scrollIntoView({ block: "center", behavior: "smooth" }); } catch (_) {}
+          await sleepJitter(80);
+          dispatchClickAtElementCenter(aEl, win, 0.3 + Math.random() * 0.4);
+          try { aEl.click(); } catch (_) {}
+          await sleepJitter(650);
+          return true;
+        }
+      } catch (_) {}
+    }
+
+    return false;
+  }
+
+  /* ── Poll for resume text until content loads (replaces fixed sleep) ── */
+
+  async function extractResumeWithRetry(doc, win, maxWaitMs) {
+    var MIN_LEN = 200;
+    var POLL_INTERVAL = 400;
+    var elapsed = 0;
+    var text = "";
+
+    // First try immediately
+    try { text = getResumeText(doc); } catch (_) {}
+    if (text.length >= MIN_LEN) return text;
+
+    // Click the Resume sub-tab in case "Profile" is active
+    await ensureResumeTabActive(doc, win);
+    try { text = getResumeText(doc); } catch (_) {}
+    if (text.length >= MIN_LEN) return text;
+
+    // Poll until resume loads or timeout
+    while (elapsed < maxWaitMs) {
+      await sleep(POLL_INTERVAL);
+      elapsed += POLL_INTERVAL;
+      try { text = getResumeText(doc); } catch (_) {}
+      if (text.length >= MIN_LEN) return text;
+    }
+
+    // Final attempt: click Overview tab then Resume sub-tab again
+    var overviewTab = null;
+    try {
+      var allTabs = Array.from(doc.querySelectorAll("a > spl-tab-label > div, a > spl-tab-label, [role='tab']"));
+      for (var i = 0; i < allTabs.length; i++) {
+        var tabText = ((allTabs[i].textContent || "") + "").replace(/\s+/g, " ").trim().toLowerCase();
+        if (/^overview$/.test(tabText)) { overviewTab = allTabs[i]; break; }
+      }
+    } catch (_) {}
+    if (overviewTab) {
+      var clickTab = overviewTab;
+      try { var pA = overviewTab.closest && overviewTab.closest("a"); if (pA) clickTab = pA; } catch (_) {}
+      try { clickTab.click(); } catch (_) {}
+      await sleep(500);
+      await ensureResumeTabActive(doc, win);
+      await sleep(500);
+      try { text = getResumeText(doc); } catch (_) {}
+    }
+
+    return text;
+  }
+
+  /* ── Deep text extraction that pierces all shadow DOM boundaries ── */
+
+  function getDeepElementText(el) {
+    var parts = [];
+    var visited = new Set();
+    function walk(node) {
+      if (!node || visited.has(node)) return;
+      visited.add(node);
+      if (node.nodeType === 3) {
+        var t = (node.textContent || "").trim();
+        if (t) parts.push(t);
+        return;
+      }
+      if (node.nodeType === 1) {
+        var tag = (node.tagName || "").toLowerCase();
+        if (tag === "script" || tag === "style" || tag === "noscript") return;
+      }
+      if (node.shadowRoot) walk(node.shadowRoot);
+      var ch = node.childNodes;
+      if (ch) { for (var i = 0; i < ch.length; i++) walk(ch[i]); }
+    }
+    walk(el);
+    return parts.join(" ").replace(/\s+/g, " ").trim();
+  }
+
+  /* ── Resume text extraction from DOM ── */
 
   function getResumeText(doc) {
     var root = doc.querySelector("#st-candidateView") || doc.body;
-    var selectors = [
+    var MIN = 200;
+
+    // Phase 1: precise resume selectors — try direct, shadow root, and deep walk
+    var preciseSelectors = [
       "sr-resume-viewer",
       "sr-candidate-resume",
       "sr-resume",
       '[data-testid*="resume"]',
-      '[class*="resume"]',
-      '[id*="resume"]',
     ];
-    for (var i = 0; i < selectors.length; i++) {
+    for (var i = 0; i < preciseSelectors.length; i++) {
       try {
-        var el = root.querySelector(selectors[i]);
+        var el = root.querySelector(preciseSelectors[i]);
         if (!el) continue;
-        var t = (el.innerText || el.textContent || "").replace(/\s+/g, " ").trim();
-        if (t && t.length > 200) return t;
+        var t = extractTextFromElement(el, MIN);
+        if (t) return t;
       } catch (_) {}
     }
-    return (root.innerText || root.textContent || "").trim();
+
+    // Phase 2: shadow DOM deep search for resume web components
+    var resumeEl = null;
+    var sVisited = new Set();
+    function walkForResume(node) {
+      if (!node || sVisited.has(node) || resumeEl) return;
+      sVisited.add(node);
+      if (node.nodeType === 1) {
+        var tag = (node.tagName || "").toLowerCase();
+        if (tag === "sr-resume-viewer" || tag === "sr-candidate-resume" || tag === "sr-resume") {
+          resumeEl = node; return;
+        }
+        try {
+          var tid = (node.getAttribute && node.getAttribute("data-testid")) || "";
+          if (/resume/i.test(tid)) {
+            var deep = getDeepElementText(node);
+            if (deep.length > MIN) { resumeEl = node; return; }
+          }
+        } catch (_) {}
+      }
+      if (node.shadowRoot) walkForResume(node.shadowRoot);
+      if (node.childNodes) {
+        for (var c = 0; c < node.childNodes.length; c++) walkForResume(node.childNodes[c]);
+      }
+    }
+    walkForResume(root);
+    if (resumeEl) {
+      var t2 = extractTextFromElement(resumeEl, MIN);
+      if (t2) return t2;
+    }
+
+    // Phase 3: broader class/id selectors, skip small UI elements
+    var broadSelectors = ['[class*="resume"]', '[id*="resume"]'];
+    for (var j = 0; j < broadSelectors.length; j++) {
+      try {
+        var el2 = root.querySelector(broadSelectors[j]);
+        if (!el2) continue;
+        var tag2 = (el2.tagName || "").toLowerCase();
+        if (tag2 === "a" || tag2 === "button" || tag2 === "label" || tag2 === "span" || tag2 === "spl-button") continue;
+        var t3 = extractTextFromElement(el2, MIN);
+        if (t3) return t3;
+      } catch (_) {}
+    }
+
+    // Phase 4: deep-walk entire candidate view, collect ALL text from shadow DOMs
+    var fullDeep = getDeepElementText(root);
+    if (fullDeep.length > MIN) return fullDeep;
+
+    // Phase 5: absolute fallback — document body deep text
+    return getDeepElementText(doc.body || doc.documentElement);
+  }
+
+  function extractTextFromElement(el, minLen) {
+    // Try innerText (respects rendering, but doesn't pierce shadow DOM)
+    try {
+      var t1 = (el.innerText || "").replace(/\s+/g, " ").trim();
+      if (t1.length >= minLen) return t1;
+    } catch (_) {}
+    // Try textContent (all text nodes in light DOM)
+    try {
+      var t2 = (el.textContent || "").replace(/\s+/g, " ").trim();
+      if (t2.length >= minLen) return t2;
+    } catch (_) {}
+    // Try one level of shadow root
+    try {
+      if (el.shadowRoot) {
+        var t3 = (el.shadowRoot.textContent || "").replace(/\s+/g, " ").trim();
+        if (t3.length >= minLen) return t3;
+      }
+    } catch (_) {}
+    // Deep recursive walk — pierces all nested shadow DOMs
+    try {
+      var t4 = getDeepElementText(el);
+      if (t4.length >= minLen) return t4;
+    } catch (_) {}
+    return null;
   }
 
   function getScreeningText(doc, win) {
@@ -304,6 +549,13 @@
     walk(body);
     if (found) return (found.innerText || found.textContent || "").trim();
     return "";
+  }
+
+  /* ── Full profile text (skills, tags, headers — everything Ctrl+F sees) ── */
+
+  function getFullProfileText(doc) {
+    var root = doc.querySelector("#st-candidateView") || doc.body || doc.documentElement;
+    return getDeepElementText(root);
   }
 
   /* ── Keyword matching (ported from req.py find_keyword_hits) ── */
@@ -369,8 +621,24 @@
       }
       var kwNorm = normalizeForKw(kwKey);
       if (!kwNorm) continue;
+
+      // LinkedIn Recruiter wildcard: trailing * means prefix match
+      var isWildcard = kwNorm.charAt(kwNorm.length - 1) === "*";
+      if (isWildcard) {
+        kwNorm = kwNorm.slice(0, -1).replace(/\s+$/, "");
+        if (!kwNorm) continue;
+      }
+
       var count = 0;
       var src = sepFlexiblePatternSource(kwNorm);
+      if (isWildcard && src) {
+        // Replace trailing word-boundary with optional trailing chars for prefix matching
+        var tail = "(?![A-Za-z0-9])";
+        var tailIdx = src.lastIndexOf(tail);
+        if (tailIdx >= 0) {
+          src = src.slice(0, tailIdx) + "[A-Za-z0-9]*";
+        }
+      }
       if (src) {
         try {
           var rx = new RegExp(src, "gi");
@@ -402,6 +670,180 @@
       }
     }
     return { hits: found, hitCount: found.length };
+  }
+
+  /* ── Boolean search parser (LinkedIn Recruiter syntax) ── */
+
+  /**
+   * Tokenizer: splits a boolean query string into tokens.
+   * Token types: AND, OR, NOT, LPAREN, RPAREN, TERM (unquoted), PHRASE (quoted)
+   */
+  function tokenizeBoolean(input) {
+    var tokens = [];
+    var i = 0;
+    var s = String(input || "");
+    while (i < s.length) {
+      // skip whitespace and newlines
+      if (/\s/.test(s[i])) { i++; continue; }
+
+      // quoted phrase
+      if (s[i] === '"' || s[i] === "\u201C" || s[i] === "\u201D") {
+        var closeChars = ['"', "\u201C", "\u201D"];
+        i++;
+        var start = i;
+        while (i < s.length && closeChars.indexOf(s[i]) < 0) i++;
+        var phrase = s.slice(start, i).trim();
+        if (i < s.length) i++; // skip closing quote
+        if (phrase) tokens.push({ type: "PHRASE", value: phrase });
+        continue;
+      }
+
+      // parentheses
+      if (s[i] === "(") { tokens.push({ type: "LPAREN" }); i++; continue; }
+      if (s[i] === ")") { tokens.push({ type: "RPAREN" }); i++; continue; }
+
+      // read a word (anything not whitespace, not parens, not quote)
+      var wStart = i;
+      while (i < s.length && !/\s/.test(s[i]) && s[i] !== "(" && s[i] !== ")" && s[i] !== '"' && s[i] !== "\u201C" && s[i] !== "\u201D") i++;
+      var word = s.slice(wStart, i);
+      if (!word) continue;
+
+      var upper = word.toUpperCase();
+      if (upper === "AND") tokens.push({ type: "AND" });
+      else if (upper === "OR") tokens.push({ type: "OR" });
+      else if (upper === "NOT") tokens.push({ type: "NOT" });
+      else tokens.push({ type: "TERM", value: word });
+    }
+    return tokens;
+  }
+
+  /**
+   * Recursive descent parser for boolean expressions.
+   * Grammar:
+   *   expression → or_expr
+   *   or_expr    → and_expr (OR and_expr)*
+   *   and_expr   → not_expr ((AND | implicit) not_expr)*
+   *   not_expr   → NOT? atom
+   *   atom       → PHRASE | TERM | ( expression )
+   *
+   * Returns an AST node: { type: "AND"|"OR"|"NOT"|"TERM", ... }
+   */
+  function parseBooleanQuery(input) {
+    var tokens = tokenizeBoolean(input);
+    var pos = 0;
+
+    function peek() { return pos < tokens.length ? tokens[pos] : null; }
+    function consume() { return tokens[pos++]; }
+
+    function parseOr() {
+      var left = parseAnd();
+      while (peek() && peek().type === "OR") {
+        consume(); // OR
+        var right = parseAnd();
+        left = { type: "OR", left: left, right: right };
+      }
+      return left;
+    }
+
+    function parseAnd() {
+      var left = parseNot();
+      while (peek()) {
+        var t = peek();
+        if (t.type === "AND") {
+          consume(); // AND
+          var right = parseNot();
+          left = { type: "AND", left: left, right: right };
+        } else if (t.type === "TERM" || t.type === "PHRASE" || t.type === "LPAREN" || t.type === "NOT") {
+          // implicit AND
+          var right2 = parseNot();
+          left = { type: "AND", left: left, right: right2 };
+        } else {
+          break;
+        }
+      }
+      return left;
+    }
+
+    function parseNot() {
+      if (peek() && peek().type === "NOT") {
+        consume(); // NOT
+        var operand = parseAtom();
+        return { type: "NOT", operand: operand };
+      }
+      return parseAtom();
+    }
+
+    function parseAtom() {
+      var t = peek();
+      if (!t) return { type: "TERM", value: "" };
+
+      if (t.type === "LPAREN") {
+        consume(); // (
+        var expr = parseOr();
+        if (peek() && peek().type === "RPAREN") consume(); // )
+        return expr;
+      }
+
+      if (t.type === "PHRASE") {
+        consume();
+        return { type: "TERM", value: t.value, quoted: true };
+      }
+
+      if (t.type === "TERM") {
+        consume();
+        return { type: "TERM", value: t.value };
+      }
+
+      // unexpected token — consume and treat as empty term
+      consume();
+      return { type: "TERM", value: "" };
+    }
+
+    if (!tokens.length) return { type: "TERM", value: "" };
+    var ast = parseOr();
+    return ast;
+  }
+
+  /**
+   * Extract all leaf terms from an AST, tagging each with whether
+   * it's under a NOT node (negated context).
+   */
+  function extractLeafTerms(ast, negated) {
+    negated = !!negated;
+    if (!ast) return [];
+    if (ast.type === "TERM") {
+      if (!ast.value) return [];
+      return [{ value: ast.value, negated: negated }];
+    }
+    if (ast.type === "NOT") {
+      return extractLeafTerms(ast.operand, true);
+    }
+    if (ast.type === "AND" || ast.type === "OR") {
+      return extractLeafTerms(ast.left, negated).concat(extractLeafTerms(ast.right, negated));
+    }
+    return [];
+  }
+
+  /**
+   * Evaluate a boolean AST against a set of matched term keys.
+   * matchedSet is an object where keys are lowercased term values that matched.
+   */
+  function evaluateBooleanAst(ast, matchedSet) {
+    if (!ast) return false;
+    if (ast.type === "TERM") {
+      var key = (ast.value || "").toLowerCase();
+      return !!matchedSet[key];
+    }
+    if (ast.type === "NOT") {
+      return !evaluateBooleanAst(ast.operand, matchedSet);
+    }
+    if (ast.type === "AND") {
+      return evaluateBooleanAst(ast.left, matchedSet) && evaluateBooleanAst(ast.right, matchedSet);
+    }
+    if (ast.type === "OR") {
+      return evaluateBooleanAst(ast.left, matchedSet) || evaluateBooleanAst(ast.right, matchedSet);
+    }
+    return false;
   }
 
   /* ── Move Forward pipeline (same as salary-triage-core.js) ── */
@@ -443,7 +885,8 @@
     if (r.width <= 0 || r.height <= 0) return;
     var bias = typeof xBias === "number" ? xBias : 0.35;
     var x = r.left + Math.max(4, Math.min(r.width * bias, r.width - 4));
-    var y = r.top + r.height / 2;
+    var yJitter = (Math.random() - 0.5) * Math.min(r.height * 0.3, 6);
+    var y = r.top + r.height / 2 + yJitter;
     var base = { bubbles: true, cancelable: true, clientX: x, clientY: y, view: win, button: 0 };
     try {
       if (typeof win.PointerEvent === "function") {
@@ -978,7 +1421,7 @@
     for (var s = 0; s < strategies.length; s++) {
       if (isDropdownMenuOpen(doc)) break;
       singleClick(splBtn, win, strategies[s]);
-      await sleep(500);
+      await sleepJitter(550);
       if (isDropdownMenuOpen(doc)) break;
     }
 
@@ -986,7 +1429,7 @@
 
     var noteItem = findNoteToSelfItem(doc);
     if (!noteItem) {
-      await sleep(400);
+      await sleepJitter(450);
       noteItem = findNoteToSelfItem(doc);
     }
     if (!noteItem) return false;
@@ -998,18 +1441,18 @@
 
     var clickEl = inner || noteItem;
     singleClick(clickEl, win, "dispatch");
-    await sleep(300);
+    await sleepJitter(350);
 
     var triggerText = getDeepText(splBtn);
     if (/note\s*to\s*self/i.test(triggerText)) return true;
 
     singleClick(clickEl, win, "native");
-    await sleep(300);
+    await sleepJitter(350);
     triggerText = getDeepText(splBtn);
     if (/note\s*to\s*self/i.test(triggerText)) return true;
 
     singleClick(noteItem, win, "dispatch");
-    await sleep(300);
+    await sleepJitter(350);
     return true;
   }
 
@@ -1020,11 +1463,11 @@
   async function prepareNotesSection(doc, win) {
     var notesTab = findNotesTab(doc, win);
     if (!notesTab) return false;
-    try { notesTab.scrollIntoView({ block: "center", behavior: "instant" }); } catch (_) {}
-    await sleep(50);
-    dispatchClickAtElementCenter(notesTab, win, 0.5);
+    try { notesTab.scrollIntoView({ block: "center", behavior: "smooth" }); } catch (_) {}
+    await sleepJitter(80);
+    dispatchClickAtElementCenter(notesTab, win, 0.3 + Math.random() * 0.4);
     try { notesTab.click(); } catch (_) {}
-    await sleep(800);
+    await sleepJitter(850);
     var ok = await selectNoteToSelf(doc, win);
     return ok;
   }
@@ -1110,6 +1553,12 @@
       return { log: log, moved: false, skipped: true, matchedKeywords: [], hitCount: 0 };
     }
 
+    var isBooleanMode = config.mode === "boolean" && config.booleanQuery;
+
+    if (isBooleanMode) {
+      return runBooleanTriageWithDoc(doc, win, config, options, log);
+    }
+
     var customExp = config.customKeywordExpansions || "";
     var keywords = resolveKeywords(config.keywords || "", customExp);
     var minHits = Math.max(1, parseInt(config.minHits, 10) || 2);
@@ -1128,23 +1577,26 @@
     }
     log.push({ ok: true, msg: "Min hits to move forward: " + minHits });
 
-    var resumeWaitMs = Math.max(1500, parseInt(config.resumeWaitMs, 10) || 3000);
-    await sleep(resumeWaitMs);
+    var resumeWaitMs = Math.max(2000, parseInt(config.resumeWaitMs, 10) || 5000);
 
-    if (postToNotes) {
-      try { await prepareNotesSection(doc, win); } catch (_) {}
-    }
-
+    // Extract resume text with polling + Resume tab click (before Notes switch)
     var resumeText = "";
-    try { resumeText = getResumeText(doc); } catch (e) {
+    try { resumeText = await extractResumeWithRetry(doc, win, resumeWaitMs); } catch (e) {
       log.push({ ok: false, msg: "Failed to extract resume text: " + (e && e.message) });
     }
     var screeningText = "";
     try { screeningText = getScreeningText(doc, win); } catch (_) {}
 
-    var allText = (resumeText + " " + screeningText).trim();
+    var profileText = "";
+    try { profileText = getFullProfileText(doc); } catch (_) {}
+
+    var allText = (resumeText + " " + screeningText + " " + profileText).trim();
     var textLen = allText.length;
-    log.push({ ok: true, msg: "Text extracted: " + textLen + " chars (resume: " + resumeText.length + ", screening: " + screeningText.length + ")" });
+    log.push({ ok: true, msg: "Text extracted: " + textLen + " chars (resume: " + resumeText.length + ", screening: " + screeningText.length + ", profile: " + profileText.length + ")" });
+
+    if (postToNotes) {
+      try { await prepareNotesSection(doc, win); } catch (_) {}
+    }
 
     if (textLen < 50) {
       log.push({ ok: false, msg: "Very little text found on page — resume may not have loaded." });
@@ -1200,15 +1652,130 @@
       return { log: log, moved: false, skipped: false, matchedKeywords: hitLabels, hitCount: result.hitCount, notesPosted: notesPosted };
     }
 
-    try { moveCtrl.btn.scrollIntoView({ block: "center", behavior: "instant" }); } catch (_) {}
-    await sleep(200);
+    try { moveCtrl.btn.scrollIntoView({ block: "center", behavior: "smooth" }); } catch (_) {}
+    await sleepJitter(250);
     try { moveCtrl.btn.focus && moveCtrl.btn.focus(); } catch (_) {}
-    await sleep(60);
+    await sleepJitter(80);
     fireMoveForwardPipelineClick(win, moveCtrl.btn, moveCtrl.host);
     log.push({ ok: true, msg: "Clicked Move forward" });
-    await sleep(moveSettleMs);
+    await sleepJitter(moveSettleMs);
 
     return { log: log, moved: true, skipped: false, matchedKeywords: hitLabels, hitCount: result.hitCount, notesPosted: notesPosted };
+  }
+
+  /* ── Boolean mode: scan + notes only, no Move forward ── */
+
+  async function runBooleanTriageWithDoc(doc, win, config, options, log) {
+    var postToNotes = !!config.postToNotes;
+    var booleanQuery = config.booleanQuery || "";
+
+    var ast;
+    try {
+      ast = parseBooleanQuery(booleanQuery);
+    } catch (e) {
+      log.push({ ok: false, msg: "Boolean parse error: " + ((e && e.message) || String(e)) });
+      return { log: log, moved: false, skipped: true, matchedKeywords: [], hitCount: 0 };
+    }
+
+    var allLeaves = extractLeafTerms(ast);
+    var positiveTerms = [];
+    var negativeTerms = [];
+    var seenLower = {};
+    for (var li = 0; li < allLeaves.length; li++) {
+      var leaf = allLeaves[li];
+      var lKey = leaf.value.toLowerCase();
+      if (seenLower[lKey]) continue;
+      seenLower[lKey] = true;
+      if (leaf.negated) negativeTerms.push(leaf.value);
+      else positiveTerms.push(leaf.value);
+    }
+
+    var totalTerms = positiveTerms.length + negativeTerms.length;
+    log.push({ ok: true, msg: "Boolean search: " + totalTerms + " terms (" + positiveTerms.length + " positive, " + negativeTerms.length + " NOT)" });
+    if (positiveTerms.length) {
+      log.push({ ok: true, msg: "Scanning: " + positiveTerms.slice(0, 10).join(", ") + (positiveTerms.length > 10 ? "..." : "") });
+    }
+
+    var resumeWaitMs = Math.max(2000, parseInt(config.resumeWaitMs, 10) || 5000);
+
+    // Extract resume text with polling + Resume tab click (before Notes switch)
+    var resumeText = "";
+    try { resumeText = await extractResumeWithRetry(doc, win, resumeWaitMs); } catch (e) {
+      log.push({ ok: false, msg: "Failed to extract resume text: " + (e && e.message) });
+    }
+    var screeningText = "";
+    try { screeningText = getScreeningText(doc, win); } catch (_) {}
+
+    var profileText = "";
+    try { profileText = getFullProfileText(doc); } catch (_) {}
+
+    var allText = (resumeText + " " + screeningText + " " + profileText).trim();
+    var textLen = allText.length;
+    log.push({ ok: true, msg: "Text extracted: " + textLen + " chars (resume: " + resumeText.length + ", screening: " + screeningText.length + ", profile: " + profileText.length + ")" });
+
+    // Now prepare notes section (this switches the visible tab)
+    if (postToNotes) {
+      try { await prepareNotesSection(doc, win); } catch (_) {}
+    }
+
+    if (textLen < 50) {
+      log.push({ ok: false, msg: "Very little text found on page — resume may not have loaded." });
+      return { log: log, moved: false, skipped: true, matchedKeywords: [], hitCount: 0 };
+    }
+
+    // Scan all terms (positive and negative) individually for boolean evaluation
+    var allTermsToScan = positiveTerms.concat(negativeTerms);
+    var scanResult = findKeywordHits(allText, allTermsToScan);
+
+    // Build matched set for boolean evaluation
+    var matchedSet = {};
+    for (var hi = 0; hi < scanResult.hits.length; hi++) {
+      matchedSet[scanResult.hits[hi].keyword.toLowerCase()] = true;
+    }
+
+    // Evaluate the full boolean expression
+    var booleanPass = evaluateBooleanAst(ast, matchedSet);
+
+    // Only report positive (non-NOT) hits in the notes
+    var positiveHits = [];
+    var positiveHitLabels = [];
+    for (var pi = 0; pi < scanResult.hits.length; pi++) {
+      var hit = scanResult.hits[pi];
+      var hitLower = hit.keyword.toLowerCase();
+      var isNegated = false;
+      for (var ni = 0; ni < negativeTerms.length; ni++) {
+        if (negativeTerms[ni].toLowerCase() === hitLower) { isNegated = true; break; }
+      }
+      if (!isNegated) {
+        positiveHits.push(hit);
+        positiveHitLabels.push(hit.count > 1 ? hit.keyword + " (x" + hit.count + ")" : hit.keyword);
+      }
+    }
+
+    var passLabel = booleanPass ? "PASS" : "FAIL";
+    log.push({ ok: booleanPass, msg: "Boolean: " + passLabel + " — " + positiveHits.length + "/" + positiveTerms.length + " positive terms matched" });
+    if (positiveHitLabels.length) {
+      log.push({ ok: true, msg: "Hits: " + positiveHitLabels.join(", ") });
+    }
+
+    var notesPosted = false;
+    if (postToNotes && positiveHits.length > 0) {
+      try {
+        notesPosted = await postKeywordHitsToNotes(doc, win, positiveHitLabels, positiveHits.length, positiveTerms.length, log);
+      } catch (e) {
+        log.push({ ok: false, msg: "Notes post error: " + ((e && e.message) || String(e)) });
+      }
+    }
+
+    return {
+      log: log,
+      moved: false,
+      skipped: false,
+      matchedKeywords: positiveHitLabels,
+      hitCount: positiveHits.length,
+      notesPosted: notesPosted,
+      booleanPass: booleanPass,
+    };
   }
 
   async function runKeywordTriageMultiFrame(config) {
@@ -1249,7 +1816,7 @@
     var win = window;
     var log = [];
     var KEY = "sr_ext_keyword_triage_v1";
-    var resumeWaitMs = Math.max(1500, parseInt(config.resumeWaitMs, 10) || 3000);
+    var resumeWaitMs = Math.max(2000, parseInt(config.resumeWaitMs, 10) || 5000);
     var moveSettleMs = Math.max(400, parseInt(config.moveSettleMs, 10) || 1800);
     var afterMoveNavigateMs = Math.max(500, parseInt(config.afterMoveNavigateMs, 10) || 1600);
     var moveButtonReadyMs = Math.max(800, parseInt(config.moveButtonReadyMs, 10) || 4500);
@@ -1258,10 +1825,12 @@
       returnUrl: win.location.href,
       initialDelayMs: Math.max(400, resumeWaitMs),
       config: {
+        mode: config.mode || "keywords",
+        booleanQuery: config.booleanQuery || "",
         keywords: config.keywords,
         customKeywordExpansions: config.customKeywordExpansions || "",
         minHits: config.minHits,
-        dryRun: config.dryRun,
+        dryRun: config.mode === "boolean" ? true : config.dryRun,
         postToNotes: !!config.postToNotes,
         resumeWaitMs: resumeWaitMs,
         moveSettleMs: moveSettleMs,
@@ -1344,4 +1913,7 @@
       return collectApplicantClickTargets(document, window);
     };
   }
+  globalThis.__srHarvestProfileUrls = function () {
+    return harvestProfileUrls(document, window);
+  };
 })();

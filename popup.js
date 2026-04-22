@@ -498,11 +498,10 @@ btnSalaryStop.addEventListener("click", async () => {
 
 // ── Keyword Search: DOM refs ──
 const kwInput         = document.getElementById("kwInput");
-const kwCustomExpansions = document.getElementById("kwCustomExpansions");
-const kwCustomExpansionsFile = document.getElementById("kwCustomExpansionsFile");
 const kwMinHits       = document.getElementById("kwMinHits");
 const kwPostToNotes   = document.getElementById("kwPostToNotes");
 const kwDryRun        = document.getElementById("kwDryRun");
+const kwWorkers       = document.getElementById("kwWorkers");
 const btnKwGo         = document.getElementById("btnKwGo");
 const btnKwStop       = document.getElementById("btnKwStop");
 const kwStatusBox     = document.getElementById("kwStatusBox");
@@ -510,122 +509,226 @@ const kwStatusDot     = document.getElementById("kwStatusDot");
 const kwStatusLabel   = document.getElementById("kwStatusLabel");
 const kwLogEl         = document.getElementById("kwLog");
 
-const KW_STORAGE_KEYS = ["kwTriageKeywords", "kwTriageCustomExpansions", "kwTriageMinHits", "kwTriagePostToNotes", "kwTriageDryRun"];
+// Mode toggle
+const kwModeKeywordsBtn = document.getElementById("kwModeKeywords");
+const kwModeBooleanBtn  = document.getElementById("kwModeBoolean");
+const kwKeywordsSection = document.getElementById("kwKeywordsSection");
+const kwBooleanSection  = document.getElementById("kwBooleanSection");
+const kwBooleanInput    = document.getElementById("kwBooleanInput");
+
+let kwCurrentMode = "keywords"; // "keywords" or "boolean"
+
+function setKwMode(mode) {
+  kwCurrentMode = mode;
+  const isKw = mode === "keywords";
+  kwModeKeywordsBtn.classList.toggle("active", isKw);
+  kwModeBooleanBtn.classList.toggle("active", !isKw);
+  kwKeywordsSection.style.display = isKw ? "" : "none";
+  kwBooleanSection.style.display = isKw ? "none" : "";
+  saveKwSettings().catch(() => {});
+}
+
+kwModeKeywordsBtn.addEventListener("click", () => setKwMode("keywords"));
+kwModeBooleanBtn.addEventListener("click", () => setKwMode("boolean"));
+
+const KW_STORAGE_KEYS = ["kwTriageKeywords", "kwTriageMinHits", "kwTriagePostToNotes", "kwTriageDryRun", "kwTriageMode", "kwTriageBooleanQuery", "kwTriageWorkers"];
 
 async function loadKwSettings() {
   const s = await chrome.storage.local.get(KW_STORAGE_KEYS);
   if (s.kwTriageKeywords != null) kwInput.value = String(s.kwTriageKeywords);
-  if (kwCustomExpansions && s.kwTriageCustomExpansions != null) {
-    kwCustomExpansions.value = String(s.kwTriageCustomExpansions);
-  }
   if (s.kwTriageMinHits != null) kwMinHits.value = String(s.kwTriageMinHits);
   if (s.kwTriagePostToNotes != null) {
     kwPostToNotes.checked = !!s.kwTriagePostToNotes;
   }
   if (s.kwTriageDryRun === true) kwDryRun.checked = true;
+  if (s.kwTriageBooleanQuery != null && kwBooleanInput) {
+    kwBooleanInput.value = String(s.kwTriageBooleanQuery);
+  }
+  if (s.kwTriageWorkers != null && kwWorkers) kwWorkers.value = String(s.kwTriageWorkers);
+  if (s.kwTriageMode === "boolean") setKwMode("boolean");
 }
 
 async function saveKwSettings() {
   await chrome.storage.local.set({
     kwTriageKeywords: kwInput.value.trim(),
-    kwTriageCustomExpansions: kwCustomExpansions ? kwCustomExpansions.value : "",
     kwTriageMinHits: kwMinHits.value.trim(),
     kwTriagePostToNotes: kwPostToNotes.checked,
     kwTriageDryRun: kwDryRun.checked,
+    kwTriageMode: kwCurrentMode,
+    kwTriageBooleanQuery: kwBooleanInput ? kwBooleanInput.value : "",
+    kwTriageWorkers: kwWorkers ? parseInt(kwWorkers.value, 10) || 1 : 1,
   });
 }
 
 function readKwConfig() {
+  var workers = Math.max(1, Math.min(3, parseInt(kwWorkers ? kwWorkers.value : "1", 10) || 1));
+  if (kwCurrentMode === "boolean") {
+    return {
+      mode: "boolean",
+      booleanQuery: kwBooleanInput ? kwBooleanInput.value.trim() : "",
+      keywords: "",
+      customKeywordExpansions: "",
+      minHits: 1,
+      postToNotes: kwPostToNotes.checked,
+      dryRun: true,
+      workers: workers,
+    };
+  }
   return {
+    mode: "keywords",
+    booleanQuery: "",
     keywords: kwInput.value.trim(),
-    customKeywordExpansions: kwCustomExpansions ? kwCustomExpansions.value : "",
+    customKeywordExpansions: "",
     minHits: kwMinHits.value.trim() === "" ? 2 : parseInt(kwMinHits.value, 10),
     postToNotes: kwPostToNotes.checked,
     dryRun: kwDryRun.checked,
+    workers: workers,
   };
 }
 
-[kwInput, kwCustomExpansions, kwMinHits, kwPostToNotes, kwDryRun].forEach((el) => {
+[kwInput, kwMinHits, kwPostToNotes, kwDryRun, kwWorkers].forEach((el) => {
   if (!el) return;
   el.addEventListener("change", () => saveKwSettings().catch(() => {}));
 });
-
-if (kwCustomExpansionsFile && kwCustomExpansions) {
-  kwCustomExpansionsFile.addEventListener("change", () => {
-    const f = kwCustomExpansionsFile.files && kwCustomExpansionsFile.files[0];
-    if (!f) return;
-    const done = (text) => {
-      kwCustomExpansions.value = text;
-      saveKwSettings().catch(() => {});
-      kwCustomExpansionsFile.value = "";
-    };
-    if (typeof f.text === "function") {
-      f.text().then(done).catch(() => {
-        kwCustomExpansionsFile.value = "";
-      });
-      return;
-    }
-    const reader = new FileReader();
-    reader.onload = () => done(String(reader.result || ""));
-    reader.onerror = () => {
-      kwCustomExpansionsFile.value = "";
-    };
-    reader.readAsText(f, "UTF-8");
-  });
+if (kwBooleanInput) {
+  kwBooleanInput.addEventListener("change", () => saveKwSettings().catch(() => {}));
 }
 
 // ── Keyword suggestions engine ──
 const KW_RELATED = {
-  "python": ["pandas", "numpy", "scipy", "flask", "django", "fastapi", "jupyter"],
+  // Languages
+  "python": ["pandas", "numpy", "scipy", "flask", "django", "fastapi", "jupyter", "PySpark"],
+  "java": ["Spring Boot", "Maven", "Gradle", "Hibernate", "JUnit", "microservices", "JVM"],
+  "javascript": ["TypeScript", "Node.js", "React", "Vue", "Angular", "ES6"],
+  "typescript": ["JavaScript", "Node.js", "React", "Angular", "NestJS"],
+  "golang": ["Go", "microservices", "concurrency", "gRPC", "Gin"],
+  "rust": ["systems programming", "WebAssembly", "memory safety", "Cargo"],
+  "c++": ["C", "systems programming", "embedded", "Qt", "Boost"],
+  "c#": [".NET", "ASP.NET", "Unity", "Azure", "LINQ"],
+  "ruby": ["Rails", "Ruby on Rails", "Sinatra", "RSpec"],
+  "php": ["Laravel", "Symfony", "WordPress", "Composer"],
+  "swift": ["iOS", "SwiftUI", "Xcode", "Apple", "Objective-C"],
+  "kotlin": ["Android", "JVM", "Jetpack Compose", "Spring"],
+  "scala": ["Spark", "Akka", "JVM", "functional programming"],
+  "r": ["RStudio", "ggplot2", "statistics", "data science", "CRAN"],
+
+  // AI / ML / Data
+  "machine learning": ["deep learning", "scikit-learn", "xgboost", "random forest", "NLP", "computer vision"],
+  "deep learning": ["pytorch", "tensorflow", "keras", "CNN", "RNN", "transformer", "neural networks"],
   "pytorch": ["tensorflow", "keras", "deep learning", "neural networks", "cuda", "torchvision"],
   "tensorflow": ["pytorch", "keras", "deep learning", "neural networks", "tflite"],
   "keras": ["tensorflow", "pytorch", "deep learning", "neural networks"],
-  "machine learning": ["deep learning", "scikit-learn", "xgboost", "random forest", "NLP", "computer vision"],
-  "deep learning": ["pytorch", "tensorflow", "keras", "CNN", "RNN", "transformer"],
   "nlp": ["spacy", "BERT", "GPT", "huggingface", "transformers", "text mining", "sentiment analysis"],
+  "ai": ["artificial intelligence", "machine learning", "deep learning", "LLM", "GPT"],
+  "ml": ["machine learning", "scikit-learn", "model training", "feature engineering"],
+  "llm": ["large language model", "GPT", "BERT", "transformer", "fine-tuning", "RAG"],
+  "data science": ["machine learning", "statistics", "Python", "R", "pandas", "visualization"],
+  "data engineering": ["ETL", "Spark", "Airflow", "data pipeline", "dbt", "Snowflake"],
+  "computer vision": ["OpenCV", "image recognition", "object detection", "YOLO", "CNN"],
+
+  // Frontend frameworks
+  "react": ["Next.js", "Redux", "TypeScript", "JavaScript", "Vue", "Angular", "React Native"],
+  "angular": ["TypeScript", "RxJS", "JavaScript", "React", "Vue", "NgRx"],
+  "vue": ["Nuxt.js", "Vuex", "Pinia", "JavaScript", "React", "Angular"],
+  "next.js": ["React", "Vercel", "SSR", "TypeScript", "fullstack"],
+  "svelte": ["SvelteKit", "JavaScript", "frontend", "reactive"],
+
+  // Backend frameworks
+  "node.js": ["Express", "NestJS", "JavaScript", "TypeScript", "npm", "Fastify"],
+  "spring boot": ["Java", "microservices", "REST API", "Hibernate", "Maven"],
+  ".net": ["C#", "ASP.NET", "Azure", "Entity Framework", "Microsoft"],
+  "django": ["Python", "REST framework", "ORM", "web development"],
+  "flask": ["Python", "REST API", "web development", "SQLAlchemy"],
+  "laravel": ["PHP", "Eloquent", "web development", "Blade"],
+
+  // Cloud
   "aws": ["EC2", "S3", "Lambda", "CloudFormation", "SageMaker", "EKS", "cloud"],
-  "azure": ["Azure DevOps", "AKS", "Azure Functions", "cloud", "Microsoft"],
+  "azure": ["Azure DevOps", "AKS", "Azure Functions", "cloud", "Microsoft", ".NET"],
   "gcp": ["BigQuery", "GKE", "Cloud Functions", "Vertex AI", "cloud"],
   "cloud": ["AWS", "Azure", "GCP", "Kubernetes", "Docker", "Terraform"],
+
+  // DevOps / Infra
   "docker": ["Kubernetes", "container", "Docker Compose", "Podman", "CI/CD"],
   "kubernetes": ["Docker", "Helm", "EKS", "AKS", "GKE", "K8s"],
+  "terraform": ["Ansible", "CloudFormation", "Pulumi", "IaC", "infrastructure"],
+  "ansible": ["Terraform", "automation", "configuration management", "DevOps"],
   "jenkins": ["GitHub Actions", "GitLab CI", "CI/CD", "CircleCI", "Terraform"],
   "github actions": ["Jenkins", "GitLab CI", "CI/CD", "CircleCI"],
   "gitlab": ["GitLab CI", "GitHub Actions", "Jenkins", "CI/CD", "Git"],
-  "git": ["GitHub", "GitLab", "Bitbucket", "version control"],
   "ci/cd": ["Jenkins", "GitHub Actions", "GitLab CI", "ArgoCD", "Terraform"],
-  "terraform": ["Ansible", "CloudFormation", "Pulumi", "IaC", "infrastructure"],
-  "react": ["Next.js", "Redux", "TypeScript", "JavaScript", "Vue", "Angular"],
-  "angular": ["TypeScript", "RxJS", "JavaScript", "React", "Vue"],
-  "vue": ["Nuxt.js", "Vuex", "JavaScript", "React", "Angular"],
-  "javascript": ["TypeScript", "Node.js", "React", "Vue", "Angular"],
-  "typescript": ["JavaScript", "Node.js", "React", "Angular"],
-  "node.js": ["Express", "NestJS", "JavaScript", "TypeScript", "npm"],
-  "java": ["Spring Boot", "Maven", "Gradle", "Hibernate", "JUnit", "microservices"],
-  "spring boot": ["Java", "microservices", "REST API", "Hibernate", "Maven"],
+  "devops": ["CI/CD", "Docker", "Kubernetes", "Terraform", "Jenkins", "monitoring", "SRE"],
+  "sre": ["site reliability", "DevOps", "monitoring", "observability", "incident management"],
+
+  // Databases
   "sql": ["PostgreSQL", "MySQL", "SQL Server", "database", "NoSQL"],
   "postgresql": ["SQL", "database", "MySQL", "pgAdmin"],
+  "mysql": ["SQL", "database", "PostgreSQL", "MariaDB"],
   "mongodb": ["NoSQL", "Mongoose", "database", "Redis"],
   "redis": ["caching", "MongoDB", "Memcached", "database"],
   "elasticsearch": ["Kibana", "Logstash", "ELK", "search", "Solr"],
+  "dynamodb": ["AWS", "NoSQL", "serverless", "database"],
+  "snowflake": ["data warehouse", "SQL", "dbt", "analytics", "BigQuery"],
+  "cassandra": ["NoSQL", "distributed", "database", "ScyllaDB"],
+
+  // Data / Streaming
   "kafka": ["event streaming", "RabbitMQ", "Spark", "data pipeline"],
   "spark": ["Hadoop", "data engineering", "PySpark", "Kafka", "Databricks"],
   "hadoop": ["Spark", "HDFS", "MapReduce", "data engineering", "Hive"],
+  "airflow": ["data pipeline", "ETL", "orchestration", "DAG", "data engineering"],
+  "dbt": ["data transformation", "SQL", "Snowflake", "analytics engineering"],
+
+  // Security
+  "cybersecurity": ["penetration testing", "SIEM", "SOC", "firewall", "encryption"],
+  "penetration testing": ["ethical hacking", "OWASP", "Burp Suite", "Kali Linux", "vulnerability"],
+  "cissp": ["security", "cybersecurity", "information security", "CISM"],
+  "ceh": ["ethical hacking", "penetration testing", "cybersecurity", "CompTIA Security+"],
+  "soc": ["SIEM", "incident response", "threat detection", "security operations"],
+
+  // Certifications
+  "aws certified": ["Solutions Architect", "Developer Associate", "SysOps", "cloud certification"],
+  "azure certified": ["AZ-900", "AZ-104", "AZ-305", "cloud certification"],
+  "ccna": ["Cisco", "networking", "CCNP", "routing", "switching"],
+  "ccnp": ["Cisco", "networking", "CCNA", "enterprise"],
+  "comptia": ["Security+", "Network+", "A+", "certification"],
+  "pmp": ["project management", "PMI", "PRINCE2", "Agile", "program management"],
+  "prince2": ["project management", "PMP", "methodology"],
+  "itil": ["IT service management", "ITSM", "incident management"],
+  "togaf": ["enterprise architecture", "framework", "IT architecture"],
+  "scrum master": ["CSM", "PSM", "Agile", "Scrum", "sprint"],
+
+  // Tools / Collaboration
+  "git": ["GitHub", "GitLab", "Bitbucket", "version control"],
+  "jira": ["Agile", "Scrum", "Confluence", "Kanban", "project management"],
+  "confluence": ["JIRA", "documentation", "wiki", "Atlassian"],
+  "figma": ["Sketch", "Adobe XD", "UI/UX", "design", "prototyping"],
+  "tableau": ["Power BI", "data visualization", "analytics", "dashboard"],
+  "power bi": ["Tableau", "data visualization", "analytics", "Microsoft"],
+
+  // Methodologies / Soft Skills
+  "agile": ["Scrum", "Kanban", "JIRA", "sprint", "product owner"],
+  "scrum": ["Agile", "Kanban", "JIRA", "sprint planning"],
+  "kanban": ["Agile", "Scrum", "lean", "workflow"],
+  "leadership": ["management", "team lead", "mentoring", "stakeholder management"],
+  "stakeholder management": ["leadership", "communication", "project management"],
+  "problem solving": ["analytical", "critical thinking", "troubleshooting"],
+  "communication": ["presentation", "stakeholder management", "collaboration"],
+
+  // Misc tech
+  "api": ["REST API", "GraphQL", "gRPC", "OpenAPI", "Swagger"],
+  "graphql": ["REST API", "Apollo", "API", "schema"],
+  "microservices": ["Docker", "Kubernetes", "API Gateway", "service mesh", "event-driven"],
+  "rest api": ["API", "GraphQL", "HTTP", "OpenAPI", "Swagger"],
+  "selenium": ["automation testing", "Playwright", "Cypress", "QA", "web scraping"],
+  "playwright": ["Selenium", "Cypress", "automation testing", "end-to-end testing"],
+
+  // Research
   "r&d": ["research", "innovation", "patents", "product development"],
+  "phd": ["research", "thesis", "publications", "doctorate"],
+
+  // H&S / Quality (kept for existing users)
   "iso 45001": ["ISO 9001", "ISO 14001", "OHSMS", "NEBOSH", "safety management"],
   "iso 9001": ["ISO 45001", "ISO 14001", "quality management", "QMS"],
   "nebosh": ["IOSH", "ISO 45001", "safety", "OSHA", "risk assessment"],
-  "phd": ["research", "thesis", "publications", "doctorate"],
-  "agile": ["Scrum", "Kanban", "JIRA", "sprint", "product owner"],
-  "scrum": ["Agile", "Kanban", "JIRA", "sprint planning"],
-  "jira": ["Agile", "Scrum", "Confluence", "Kanban", "project management"],
-  "figma": ["Sketch", "Adobe XD", "UI/UX", "design", "prototyping"],
-  "data science": ["machine learning", "statistics", "Python", "R", "pandas", "visualization"],
-  "devops": ["CI/CD", "Docker", "Kubernetes", "Terraform", "Jenkins", "monitoring"],
-  "cybersecurity": ["penetration testing", "SIEM", "SOC", "firewall", "encryption"],
-  "golang": ["Go", "microservices", "concurrency", "gRPC"],
-  "rust": ["systems programming", "WebAssembly", "memory safety"],
-  "c++": ["C", "systems programming", "embedded", "Qt", "game development"],
 };
 
 const kwSuggestionsBox = document.getElementById("kwSuggestionsBox");
@@ -643,6 +746,21 @@ function getExistingKeywords(textarea) {
   return (textarea.value || "").split(/[,;\n]+/).map(s => s.trim().toLowerCase()).filter(Boolean);
 }
 
+// Built-in expansion abbreviations for dynamic suggestions
+const KW_EXPANSIONS_SUGGEST = {
+  "ml": "machine learning", "ai": "artificial intelligence", "nlp": "natural language processing",
+  "dl": "deep learning", "cv": "computer vision", "phd": "Ph.D / doctorate",
+  "aws": "Amazon Web Services", "gcp": "Google Cloud Platform", "api": "application programming interface",
+  "ctf": "capture the flag", "bsc": "B.S / bachelor's", "ms": "M.S / master's",
+  "sre": "site reliability engineering", "llm": "large language model", "etl": "extract transform load",
+  "iac": "infrastructure as code", "qa": "quality assurance", "ui/ux": "user interface / user experience",
+  "ci/cd": "continuous integration / deployment", "saas": "software as a service",
+  "b2b": "business to business", "b2c": "business to consumer", "sdk": "software development kit",
+  "orm": "object-relational mapping", "ssr": "server-side rendering", "sso": "single sign-on",
+  "rbac": "role-based access control", "cdn": "content delivery network", "dns": "domain name system",
+  "vpn": "virtual private network", "ssl": "secure sockets layer / TLS",
+};
+
 function showKwSuggestions() {
   const token = getLastToken(kwInput);
   kwSuggestionsBox.innerHTML = "";
@@ -654,6 +772,16 @@ function showKwSuggestions() {
   const existing = new Set(getExistingKeywords(kwInput));
   const suggestions = [];
   const seen = new Set();
+
+  // Expansion abbreviation matches (e.g. typing "ml" suggests "machine learning")
+  for (const [abbr, fullForm] of Object.entries(KW_EXPANSIONS_SUGGEST)) {
+    if (abbr === token || abbr.startsWith(token)) {
+      if (!existing.has(fullForm.toLowerCase()) && !seen.has(fullForm.toLowerCase())) {
+        suggestions.push({ text: fullForm.split(" / ")[0], reason: abbr.toUpperCase() + " expands to" });
+        seen.add(fullForm.toLowerCase());
+      }
+    }
+  }
 
   for (const [key, related] of Object.entries(KW_RELATED)) {
     if (key.startsWith(token) || key.includes(token)) {
@@ -772,7 +900,15 @@ async function ensureKeywordCore(tabId) {
 btnKwGo.addEventListener("click", async () => {
   await saveKwSettings().catch(() => {});
   const cfg = readKwConfig();
-  if (!cfg.keywords) {
+  if (cfg.mode === "boolean") {
+    if (!cfg.booleanQuery) {
+      kwStatusBox.classList.add("visible");
+      kwLogEl.innerHTML = "";
+      kwLog("✗", "Paste a boolean search query.");
+      setKwStatus("error", "Need boolean query");
+      return;
+    }
+  } else if (!cfg.keywords) {
     kwStatusBox.classList.add("visible");
     kwLogEl.innerHTML = "";
     kwLog("✗", "Enter at least one keyword.");
@@ -794,25 +930,74 @@ btnKwGo.addEventListener("click", async () => {
   kwLogEl.innerHTML = "";
   setKwStatus("salary-running", "Starting…");
 
+  const workers = cfg.workers || 1;
+
   try {
-    await ensureKeywordCore(tab.id);
-    const [inj] = await chrome.scripting.executeScript({
-      target: { tabId: tab.id, allFrames: false },
-      func: (c) => globalThis.__srKeywordTriageStartQueue(c),
-      args: [cfg],
-    });
-    const out = inj?.result;
-    const lines = out?.log || [];
-    for (const e of lines) kwLog(e.ok ? "✓" : "✗", e.msg);
-    if (out?.ok && out?.queued) {
-      const modeHint = out.mode === "click"
-        ? "Click-through queue: opening each name."
-        : "URL queue: jumping to each profile.";
-      kwLog("✓", modeHint);
-      kwLog("✓", "Keep this browser tab focused; results saved when finished.");
-      setKwStatus("salary-done", "Keyword search running — keep tab focused");
+    if (workers > 1) {
+      // Parallel mode: harvest URLs first, then hand off to background.js
+      await ensureKeywordCore(tab.id);
+      const [harvest] = await chrome.scripting.executeScript({
+        target: { tabId: tab.id, allFrames: false },
+        func: () => {
+          if (typeof globalThis.__srAutoscrollApplicantListUntilLoaded === "function") {
+            return globalThis.__srAutoscrollApplicantListUntilLoaded().then(() => {
+              if (typeof globalThis.__srHarvestProfileUrls === "function") {
+                return globalThis.__srHarvestProfileUrls();
+              }
+              return [];
+            });
+          }
+          if (typeof globalThis.__srHarvestProfileUrls === "function") {
+            return globalThis.__srHarvestProfileUrls();
+          }
+          return [];
+        },
+      });
+      const urls = harvest?.result || [];
+      if (!urls.length) {
+        kwLog("✗", "No profile URLs found — scroll to load applicants, then try again.");
+        setKwStatus("error", "No profiles");
+        btnKwGo.disabled = false;
+        return;
+      }
+      kwLog("✓", "Found " + urls.length + " profiles. Starting " + workers + " parallel workers…");
+      const resp = await chrome.runtime.sendMessage({
+        type: "srStartParallelKeywordQueue",
+        urls: urls,
+        config: cfg,
+        workers: workers,
+        returnUrl: tab.url,
+      });
+      if (resp?.ok) {
+        const modeLabel = cfg.mode === "boolean" ? "Boolean search" : "Keyword search";
+        kwLog("✓", "Dispatched " + urls.length + " profiles across " + workers + " workers.");
+        setKwStatus("salary-done", modeLabel + " running (" + workers + " workers)");
+      } else {
+        kwLog("✗", resp?.error || "Failed to start parallel queue.");
+        setKwStatus("error", "Queue failed");
+      }
     } else {
-      setKwStatus("error", "Queue failed");
+      // Single-tab mode (original behavior)
+      await ensureKeywordCore(tab.id);
+      const [inj] = await chrome.scripting.executeScript({
+        target: { tabId: tab.id, allFrames: false },
+        func: (c) => globalThis.__srKeywordTriageStartQueue(c),
+        args: [cfg],
+      });
+      const out = inj?.result;
+      const lines = out?.log || [];
+      for (const e of lines) kwLog(e.ok ? "✓" : "✗", e.msg);
+      if (out?.ok && out?.queued) {
+        const modeHint = out.mode === "click"
+          ? "Click-through queue: opening each name."
+          : "URL queue: jumping to each profile.";
+        kwLog("✓", modeHint);
+        kwLog("✓", "Keep this browser tab focused; results saved when finished.");
+        const modeLabel = cfg.mode === "boolean" ? "Boolean search" : "Keyword search";
+        setKwStatus("salary-done", modeLabel + " running — keep tab focused");
+      } else {
+        setKwStatus("error", "Queue failed");
+      }
     }
   } catch (e) {
     kwLog("✗", String(e?.message || e));
@@ -823,11 +1008,19 @@ btnKwGo.addEventListener("click", async () => {
 });
 
 btnKwStop.addEventListener("click", async () => {
-  const tab = await getSmartRecruitersTab();
   kwStatusBox.classList.add("visible");
   kwLogEl.innerHTML = "";
+
+  // Stop parallel workers via background.js
+  try {
+    await chrome.runtime.sendMessage({ type: "srStopParallelKeywordQueue" });
+  } catch (_) {}
+
+  // Also stop single-tab queue
+  const tab = await getSmartRecruitersTab();
   if (!tab) {
-    kwLog("✗", "Open a SmartRecruiters tab to clear queue.");
+    kwLog("✓", "Queue cleared.");
+    setKwStatus("salary-done", "Stopped");
     return;
   }
   try {

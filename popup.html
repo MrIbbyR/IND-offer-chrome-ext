@@ -120,6 +120,32 @@
     #panel-keyword .field-hint { color: #d0d8e8; }
     #panel-keyword .salary-check { color: #d0d8e8; }
 
+    /* Keyword / Boolean mode toggle */
+    .kw-mode-toggle {
+      display: flex;
+      gap: 6px;
+      margin-bottom: 2px;
+    }
+    .kw-mode-btn {
+      flex: 1;
+      padding: 7px 8px;
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      background: var(--surface);
+      color: var(--muted);
+      font-family: var(--display);
+      font-size: 11px;
+      font-weight: 700;
+      cursor: pointer;
+      transition: color 0.15s, background 0.15s, border-color 0.15s;
+    }
+    .kw-mode-btn:hover { color: var(--text); border-color: #333; }
+    .kw-mode-btn.active {
+      color: var(--salary-accent);
+      border-color: var(--salary-accent);
+      background: var(--salary-dim);
+    }
+
     /* Keyword suggestions dropdown */
     #kwSuggestionsBox {
       display: none;
@@ -584,37 +610,52 @@
     </div>
   </div>
 
-  <!-- ── Keyword Search ── -->
+  <!-- ── Keyword / Boolean Search ── -->
   <div class="panel" id="panel-keyword">
     <div class="salary-fields">
-      <div class="field-row" style="position:relative">
-        <label for="kwInput">Keywords (comma-separated)</label>
-        <textarea id="kwInput" rows="3" placeholder="e.g. Python, AWS, Machine Learning, Chennai" autocomplete="off"></textarea>
-        <div id="kwSuggestionsBox"></div>
-        <div class="field-hint">Abbreviations like ML, AI, NLP auto-expand to full forms &middot; type to see related suggestions</div>
+      <div class="field-row kw-mode-toggle">
+        <button type="button" class="kw-mode-btn active" id="kwModeKeywords">Keywords</button>
+        <button type="button" class="kw-mode-btn" id="kwModeBoolean">Boolean</button>
       </div>
-      <div class="field-row">
-        <label for="kwCustomExpansions">Custom expansions (optional)</label>
-        <textarea id="kwCustomExpansions" rows="4" placeholder="Same as keyword_expansions.txt — one rule per line:&#10;abbr|full form 1, full form 2&#10;# lines starting with # are ignored"></textarea>
-        <div class="field-hint">Merged with built-in rules. Example: <code style="font-size:11px">nebosh|NEBOSH IGC, international general certificate</code></div>
-        <label class="salary-check" style="margin-top:8px">
-          <span style="margin-right:8px">Load from .txt</span>
-          <input type="file" id="kwCustomExpansionsFile" accept=".txt,text/plain" />
+
+      <!-- Keywords mode -->
+      <div id="kwKeywordsSection">
+        <div class="field-row" style="position:relative">
+          <label for="kwInput">Keywords (comma-separated)</label>
+          <textarea id="kwInput" rows="3" placeholder="e.g. Python, AWS, Machine Learning, Chennai" autocomplete="off"></textarea>
+          <div id="kwSuggestionsBox"></div>
+          <div class="field-hint">Abbreviations like ML, AI, NLP auto-expand to full forms &middot; type to see related suggestions</div>
+        </div>
+        <div class="field-row">
+          <label for="kwMinHits">Min keywords to match</label>
+          <input type="number" id="kwMinHits" placeholder="2" min="1" step="1" />
+          <div class="field-hint">Move forward only if at least this many keywords are found</div>
+        </div>
+        <label class="salary-check">
+          <input type="checkbox" id="kwDryRun" />
+          Dry run (scan keywords only, never click Move)
         </label>
       </div>
-      <div class="field-row">
-        <label for="kwMinHits">Min keywords to match</label>
-        <input type="number" id="kwMinHits" placeholder="2" min="1" step="1" />
-        <div class="field-hint">Move forward only if at least this many keywords are found</div>
+
+      <!-- Boolean mode -->
+      <div id="kwBooleanSection" style="display:none">
+        <div class="field-row">
+          <label for="kwBooleanInput">Boolean Search</label>
+          <textarea id="kwBooleanInput" rows="8" placeholder='Paste LinkedIn Recruiter boolean here, e.g.&#10;(Python OR Java) AND &quot;machine learning&quot;&#10;AND NOT intern'></textarea>
+          <div class="field-hint">Supports AND, OR, NOT, &quot;quoted phrases&quot;, (parentheses) &mdash; same syntax as LinkedIn Recruiter</div>
+        </div>
       </div>
+
+      <!-- Shared options -->
       <label class="salary-check">
         <input type="checkbox" id="kwPostToNotes" checked />
         Post keyword hits to Notes on profile
       </label>
-      <label class="salary-check">
-        <input type="checkbox" id="kwDryRun" />
-        Dry run (scan keywords only, never click Move)
-      </label>
+      <div class="field-row">
+        <label for="kwWorkers">Parallel workers</label>
+        <input type="number" id="kwWorkers" placeholder="1" min="1" max="5" step="1" value="1" />
+        <div class="field-hint">Open this many profile tabs at once (1–5). Higher = faster but may trigger DataDome.</div>
+      </div>
     </div>
 
     <div class="salary-actions">

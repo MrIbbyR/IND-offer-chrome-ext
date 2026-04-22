@@ -11,6 +11,16 @@
     });
   }
 
+  function jitter(baseMs) {
+    const lo = Math.round(baseMs * 0.65);
+    const hi = Math.round(baseMs * 1.35);
+    return lo + Math.floor(Math.random() * (hi - lo + 1));
+  }
+
+  function sleepJitter(baseMs) {
+    return sleep(jitter(baseMs));
+  }
+
   function normUrl(u) {
     try {
       const x = new URL(u, location.href);
@@ -110,7 +120,7 @@
       showToast("Cost assist: done — returning to list.");
       setTimeout(function () {
         window.location.replace(back);
-      }, 400);
+      }, jitter(500));
     } else {
       showToast("Cost assist: finished (" + resultsLen + " profiles).");
     }
@@ -124,7 +134,7 @@
       return;
     }
 
-    await sleep(300);
+    await sleepJitter(400);
 
     if (typeof globalThis.__srAutoscrollApplicantListUntilLoaded === "function") {
       try {
@@ -154,9 +164,9 @@
 
     const el = targets[state.clickIndex];
     try {
-      el.scrollIntoView({ block: "center", behavior: "instant" });
+      el.scrollIntoView({ block: "center", behavior: "smooth" });
     } catch (_) {}
-    await sleep(200);
+    await sleepJitter(250);
     try {
       el.click();
     } catch (_) {
@@ -238,7 +248,7 @@
 
       const cfgWait = state.config && state.config.screeningWaitMs;
       const delay = Math.max(250, parseInt(state.initialDelayMs, 10) || parseInt(cfgWait, 10) || 500);
-      await sleep(delay);
+      await sleepJitter(delay);
 
       const controlsOk = await waitUntilSrControlsReady(queueReadyCap);
       if (!controlsOk) {
@@ -317,7 +327,7 @@
         300,
         parseInt(state.config && state.config.afterMoveNavigateMs, 10) || 600
       );
-      if (result.moved) await sleep(afterMoveMs);
+      if (result.moved) await sleepJitter(afterMoveMs);
 
       if (kind === "urls") {
         state.queue.shift();
