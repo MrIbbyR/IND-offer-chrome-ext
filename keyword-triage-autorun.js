@@ -102,7 +102,7 @@
     var back = state.returnUrl && String(state.returnUrl).trim();
     if (back && /^https?:\/\//i.test(back) && /smartrecruiters\.com/i.test(back)) {
       showToast("Keyword search: done — returning to list.");
-      setTimeout(function () { window.location.replace(back); }, jitter(500));
+      setTimeout(function () { window.location.replace(back); }, 400);
     } else {
       showToast("Keyword search: finished (" + resultsLen + " profiles).");
     }
@@ -115,7 +115,7 @@
       window.location.replace(state.returnUrl);
       return;
     }
-    await sleepJitter(750);
+    await sleep(650);
     if (typeof globalThis.__srAutoscrollApplicantListUntilLoaded === "function") {
       try {
         await globalThis.__srAutoscrollApplicantListUntilLoaded();
@@ -139,8 +139,8 @@
       return;
     }
     var el = targets[state.clickIndex];
-    try { el.scrollIntoView({ block: "center", behavior: "smooth" }); } catch (_) {}
-    await sleepJitter(250);
+    try { el.scrollIntoView({ block: "center", behavior: "instant" }); } catch (_) {}
+    await sleep(200);
     try { el.click(); } catch (_) {
       try {
         var r = el.getBoundingClientRect();
@@ -181,43 +181,55 @@
     var controlsOk = await waitUntilSrControlsReady(12000);
     if (!controlsOk) {
       try {
-        chrome.runtime.sendMessage({
-          type: "srWorkerDone",
-          hitCount: 0, matchedKeywords: [], notesPosted: false,
-          error: "controls_timeout",
-        }, function () { chrome.runtime.lastError; });
+        chrome.runtime.sendMessage(
+          {
+            type: "srWorkerDone",
+            hitCount: 0,
+            matchedKeywords: [],
+            notesPosted: false,
+            error: "controls_timeout",
+          },
+          function () {
+            chrome.runtime.lastError;
+          }
+        );
       } catch (_) {}
       return true;
     }
 
     var result;
     try {
-      var runner = typeof globalThis.__srKeywordTriageRunMulti === "function"
-        ? globalThis.__srKeywordTriageRunMulti
-        : globalThis.__srKeywordTriageRun;
+      var runner =
+        typeof globalThis.__srKeywordTriageRunMulti === "function"
+          ? globalThis.__srKeywordTriageRunMulti
+          : globalThis.__srKeywordTriageRun;
       result = await runner(cfgData);
     } catch (e) {
       result = {
-        hitCount: 0, matchedKeywords: [], moved: false,
+        hitCount: 0,
+        matchedKeywords: [],
+        moved: false,
         log: [{ ok: false, msg: String((e && e.message) || e) }],
       };
     }
 
     try {
       var resp2 = await new Promise(function (resolve) {
-        chrome.runtime.sendMessage({
-          type: "srWorkerDone",
-          hitCount: result.hitCount || 0,
-          matchedKeywords: result.matchedKeywords || [],
-          booleanPass: result.booleanPass,
-          notesPosted: !!result.notesPosted,
-        }, function (r) {
-          if (chrome.runtime.lastError) resolve(null);
-          else resolve(r);
-        });
+        chrome.runtime.sendMessage(
+          {
+            type: "srWorkerDone",
+            hitCount: result.hitCount || 0,
+            matchedKeywords: result.matchedKeywords || [],
+            booleanPass: result.booleanPass,
+            notesPosted: !!result.notesPosted,
+          },
+          function (r) {
+            if (chrome.runtime.lastError) resolve(null);
+            else resolve(r);
+          }
+        );
       });
       if (resp2 && resp2.next && resp2.url) {
-        // background.js will navigate this tab to the next URL
         return true;
       }
     } catch (_) {}
@@ -229,7 +241,6 @@
     if (!/smartrecruiters\.com/i.test(location.hostname)) return;
     if (window.top !== window.self) return;
 
-    // Check if this tab is a parallel worker
     try {
       var wasWorker = await runAsParallelWorker();
       if (wasWorker) return;
@@ -290,7 +301,7 @@
 
       var cfgWait = state.config && state.config.resumeWaitMs;
       var delay = Math.max(400, parseInt(state.initialDelayMs, 10) || parseInt(cfgWait, 10) || 2000);
-      await sleepJitter(delay);
+      await sleep(delay);
 
       var controlsOk = await waitUntilSrControlsReady(queueReadyCap);
       if (!controlsOk) {
@@ -339,11 +350,12 @@
         moved: !!result.moved,
         hitCount: result.hitCount || 0,
         matchedKeywords: result.matchedKeywords || [],
+        booleanPass: result.booleanPass,
         clickIndex: kind === "click" ? state.clickIndex : undefined,
       });
 
       var afterMoveMs = Math.max(500, parseInt(state.config && state.config.afterMoveNavigateMs, 10) || 1600);
-      if (result.moved) await sleepJitter(afterMoveMs);
+      if (result.moved) await sleep(afterMoveMs);
 
       if (kind === "urls") {
         state.queue.shift();

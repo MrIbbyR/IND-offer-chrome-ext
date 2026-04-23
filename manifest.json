@@ -1,8 +1,8 @@
 {
   "manifest_version": 3,
-  "name": "SR Offer Filler",
-  "version": "1.8.3",
-  "description": "SmartRecruiters: offer form fill, Cost assist (salary triage), and Keyword Search (resume keyword matching + Move forward queue)",
+  "name": "NIQ TA Helper",
+  "version": "1.9.1",
+  "description": "Smartrecruiters TA helper for NIQ associates. Cost assist, Cntrl F Tagging & Boolean tagging and Offer automation",
   "permissions": ["activeTab", "scripting", "storage", "tabs"],
   "background": {
     "service_worker": "background.js"
@@ -22,12 +22,6 @@
     "48": "icon.png"
   },
   "content_scripts": [
-    {
-      "matches": ["https://*.smartrecruiters.com/*"],
-      "js": ["shadow-open-patch.js"],
-      "run_at": "document_start",
-      "world": "MAIN"
-    },
     {
       "matches": ["https://*.smartrecruiters.com/*"],
       "js": ["sr-list-autoscroll.js", "salary-triage-core.js", "salary-triage-autorun.js", "keyword-triage-core.js", "keyword-triage-autorun.js"],

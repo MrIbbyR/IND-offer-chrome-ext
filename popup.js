@@ -1,4 +1,4 @@
-// popup.js — SR Tools: Mr Offer + Cost assist
+// popup.js — NIQ TA Helper: Offer + Cost assist + Keyword/Boolean
 // Uses xlsx-mini.js (local, self-contained — no CDN required).
 
 const BINDINGS = [
@@ -509,29 +509,36 @@ const kwStatusDot     = document.getElementById("kwStatusDot");
 const kwStatusLabel   = document.getElementById("kwStatusLabel");
 const kwLogEl         = document.getElementById("kwLog");
 
-// Mode toggle
 const kwModeKeywordsBtn = document.getElementById("kwModeKeywords");
 const kwModeBooleanBtn  = document.getElementById("kwModeBoolean");
 const kwKeywordsSection = document.getElementById("kwKeywordsSection");
 const kwBooleanSection  = document.getElementById("kwBooleanSection");
 const kwBooleanInput    = document.getElementById("kwBooleanInput");
 
-let kwCurrentMode = "keywords"; // "keywords" or "boolean"
+let kwCurrentMode = "keywords";
 
 function setKwMode(mode) {
   kwCurrentMode = mode;
   const isKw = mode === "keywords";
-  kwModeKeywordsBtn.classList.toggle("active", isKw);
-  kwModeBooleanBtn.classList.toggle("active", !isKw);
-  kwKeywordsSection.style.display = isKw ? "" : "none";
-  kwBooleanSection.style.display = isKw ? "none" : "";
+  if (kwModeKeywordsBtn) kwModeKeywordsBtn.classList.toggle("active", isKw);
+  if (kwModeBooleanBtn) kwModeBooleanBtn.classList.toggle("active", !isKw);
+  if (kwKeywordsSection) kwKeywordsSection.style.display = isKw ? "" : "none";
+  if (kwBooleanSection) kwBooleanSection.style.display = isKw ? "none" : "";
   saveKwSettings().catch(() => {});
 }
 
-kwModeKeywordsBtn.addEventListener("click", () => setKwMode("keywords"));
-kwModeBooleanBtn.addEventListener("click", () => setKwMode("boolean"));
+if (kwModeKeywordsBtn) kwModeKeywordsBtn.addEventListener("click", () => setKwMode("keywords"));
+if (kwModeBooleanBtn) kwModeBooleanBtn.addEventListener("click", () => setKwMode("boolean"));
 
-const KW_STORAGE_KEYS = ["kwTriageKeywords", "kwTriageMinHits", "kwTriagePostToNotes", "kwTriageDryRun", "kwTriageMode", "kwTriageBooleanQuery", "kwTriageWorkers"];
+const KW_STORAGE_KEYS = [
+  "kwTriageKeywords",
+  "kwTriageMinHits",
+  "kwTriagePostToNotes",
+  "kwTriageDryRun",
+  "kwTriageMode",
+  "kwTriageBooleanQuery",
+  "kwTriageWorkers",
+];
 
 async function loadKwSettings() {
   const s = await chrome.storage.local.get(KW_STORAGE_KEYS);
@@ -544,8 +551,8 @@ async function loadKwSettings() {
   if (s.kwTriageBooleanQuery != null && kwBooleanInput) {
     kwBooleanInput.value = String(s.kwTriageBooleanQuery);
   }
-  if (s.kwTriageWorkers != null && kwWorkers) kwWorkers.value = String(s.kwTriageWorkers);
   if (s.kwTriageMode === "boolean") setKwMode("boolean");
+  if (s.kwTriageWorkers != null && kwWorkers) kwWorkers.value = String(s.kwTriageWorkers);
 }
 
 async function saveKwSettings() {
@@ -556,179 +563,108 @@ async function saveKwSettings() {
     kwTriageDryRun: kwDryRun.checked,
     kwTriageMode: kwCurrentMode,
     kwTriageBooleanQuery: kwBooleanInput ? kwBooleanInput.value : "",
-    kwTriageWorkers: kwWorkers ? parseInt(kwWorkers.value, 10) || 1 : 1,
+    kwTriageWorkers: kwWorkers ? Math.max(1, Math.min(5, parseInt(kwWorkers.value, 10) || 3)) : 3,
   });
 }
 
+function readKwWorkers() {
+  if (!kwWorkers) return 3;
+  const n = parseInt(kwWorkers.value, 10);
+  if (!Number.isFinite(n) || n < 1) return 3;
+  return Math.min(5, n);
+}
+
 function readKwConfig() {
-  var workers = Math.max(1, Math.min(3, parseInt(kwWorkers ? kwWorkers.value : "1", 10) || 1));
+  const workers = readKwWorkers();
   if (kwCurrentMode === "boolean") {
     return {
       mode: "boolean",
       booleanQuery: kwBooleanInput ? kwBooleanInput.value.trim() : "",
       keywords: "",
-      customKeywordExpansions: "",
       minHits: 1,
       postToNotes: kwPostToNotes.checked,
       dryRun: true,
-      workers: workers,
+      workers,
     };
   }
   return {
     mode: "keywords",
     booleanQuery: "",
     keywords: kwInput.value.trim(),
-    customKeywordExpansions: "",
     minHits: kwMinHits.value.trim() === "" ? 2 : parseInt(kwMinHits.value, 10),
     postToNotes: kwPostToNotes.checked,
     dryRun: kwDryRun.checked,
-    workers: workers,
+    workers,
   };
 }
 
-[kwInput, kwMinHits, kwPostToNotes, kwDryRun, kwWorkers].forEach((el) => {
+[kwInput, kwMinHits, kwPostToNotes, kwDryRun, kwBooleanInput, kwWorkers].forEach((el) => {
   if (!el) return;
   el.addEventListener("change", () => saveKwSettings().catch(() => {}));
 });
-if (kwBooleanInput) {
-  kwBooleanInput.addEventListener("change", () => saveKwSettings().catch(() => {}));
-}
 
 // ── Keyword suggestions engine ──
-const KW_RELATED = {
-  // Languages
-  "python": ["pandas", "numpy", "scipy", "flask", "django", "fastapi", "jupyter", "PySpark"],
-  "java": ["Spring Boot", "Maven", "Gradle", "Hibernate", "JUnit", "microservices", "JVM"],
-  "javascript": ["TypeScript", "Node.js", "React", "Vue", "Angular", "ES6"],
-  "typescript": ["JavaScript", "Node.js", "React", "Angular", "NestJS"],
-  "golang": ["Go", "microservices", "concurrency", "gRPC", "Gin"],
-  "rust": ["systems programming", "WebAssembly", "memory safety", "Cargo"],
-  "c++": ["C", "systems programming", "embedded", "Qt", "Boost"],
-  "c#": [".NET", "ASP.NET", "Unity", "Azure", "LINQ"],
-  "ruby": ["Rails", "Ruby on Rails", "Sinatra", "RSpec"],
-  "php": ["Laravel", "Symfony", "WordPress", "Composer"],
-  "swift": ["iOS", "SwiftUI", "Xcode", "Apple", "Objective-C"],
-  "kotlin": ["Android", "JVM", "Jetpack Compose", "Spring"],
-  "scala": ["Spark", "Akka", "JVM", "functional programming"],
-  "r": ["RStudio", "ggplot2", "statistics", "data science", "CRAN"],
+/** Near-miss spellings → suggestion key (lowercase) for “Did you mean …” */
+const KW_TYPO_HINTS = {
+  pytroch: "pytorch",
+  pytoch: "pytorch",
+  tensorlfow: "tensorflow",
+  tensorfow: "tensorflow",
+  tenserflow: "tensorflow",
+  azuer: "azure",
+};
 
-  // AI / ML / Data
-  "machine learning": ["deep learning", "scikit-learn", "xgboost", "random forest", "NLP", "computer vision"],
-  "deep learning": ["pytorch", "tensorflow", "keras", "CNN", "RNN", "transformer", "neural networks"],
+const KW_RELATED = {
+  "python": ["pandas", "numpy", "scipy", "flask", "django", "fastapi", "jupyter"],
   "pytorch": ["tensorflow", "keras", "deep learning", "neural networks", "cuda", "torchvision"],
   "tensorflow": ["pytorch", "keras", "deep learning", "neural networks", "tflite"],
   "keras": ["tensorflow", "pytorch", "deep learning", "neural networks"],
+  "machine learning": ["deep learning", "scikit-learn", "xgboost", "random forest", "NLP", "computer vision"],
+  "deep learning": ["pytorch", "tensorflow", "keras", "CNN", "RNN", "transformer"],
   "nlp": ["spacy", "BERT", "GPT", "huggingface", "transformers", "text mining", "sentiment analysis"],
-  "ai": ["artificial intelligence", "machine learning", "deep learning", "LLM", "GPT"],
-  "ml": ["machine learning", "scikit-learn", "model training", "feature engineering"],
-  "llm": ["large language model", "GPT", "BERT", "transformer", "fine-tuning", "RAG"],
-  "data science": ["machine learning", "statistics", "Python", "R", "pandas", "visualization"],
-  "data engineering": ["ETL", "Spark", "Airflow", "data pipeline", "dbt", "Snowflake"],
-  "computer vision": ["OpenCV", "image recognition", "object detection", "YOLO", "CNN"],
-
-  // Frontend frameworks
-  "react": ["Next.js", "Redux", "TypeScript", "JavaScript", "Vue", "Angular", "React Native"],
-  "angular": ["TypeScript", "RxJS", "JavaScript", "React", "Vue", "NgRx"],
-  "vue": ["Nuxt.js", "Vuex", "Pinia", "JavaScript", "React", "Angular"],
-  "next.js": ["React", "Vercel", "SSR", "TypeScript", "fullstack"],
-  "svelte": ["SvelteKit", "JavaScript", "frontend", "reactive"],
-
-  // Backend frameworks
-  "node.js": ["Express", "NestJS", "JavaScript", "TypeScript", "npm", "Fastify"],
-  "spring boot": ["Java", "microservices", "REST API", "Hibernate", "Maven"],
-  ".net": ["C#", "ASP.NET", "Azure", "Entity Framework", "Microsoft"],
-  "django": ["Python", "REST framework", "ORM", "web development"],
-  "flask": ["Python", "REST API", "web development", "SQLAlchemy"],
-  "laravel": ["PHP", "Eloquent", "web development", "Blade"],
-
-  // Cloud
   "aws": ["EC2", "S3", "Lambda", "CloudFormation", "SageMaker", "EKS", "cloud"],
-  "azure": ["Azure DevOps", "AKS", "Azure Functions", "cloud", "Microsoft", ".NET"],
+  "azure": ["Azure DevOps", "AKS", "Azure Functions", "cloud", "Microsoft"],
   "gcp": ["BigQuery", "GKE", "Cloud Functions", "Vertex AI", "cloud"],
   "cloud": ["AWS", "Azure", "GCP", "Kubernetes", "Docker", "Terraform"],
-
-  // DevOps / Infra
   "docker": ["Kubernetes", "container", "Docker Compose", "Podman", "CI/CD"],
   "kubernetes": ["Docker", "Helm", "EKS", "AKS", "GKE", "K8s"],
-  "terraform": ["Ansible", "CloudFormation", "Pulumi", "IaC", "infrastructure"],
-  "ansible": ["Terraform", "automation", "configuration management", "DevOps"],
   "jenkins": ["GitHub Actions", "GitLab CI", "CI/CD", "CircleCI", "Terraform"],
   "github actions": ["Jenkins", "GitLab CI", "CI/CD", "CircleCI"],
   "gitlab": ["GitLab CI", "GitHub Actions", "Jenkins", "CI/CD", "Git"],
+  "git": ["GitHub", "GitLab", "Bitbucket", "version control"],
   "ci/cd": ["Jenkins", "GitHub Actions", "GitLab CI", "ArgoCD", "Terraform"],
-  "devops": ["CI/CD", "Docker", "Kubernetes", "Terraform", "Jenkins", "monitoring", "SRE"],
-  "sre": ["site reliability", "DevOps", "monitoring", "observability", "incident management"],
-
-  // Databases
+  "terraform": ["Ansible", "CloudFormation", "Pulumi", "IaC", "infrastructure"],
+  "react": ["Next.js", "Redux", "TypeScript", "JavaScript", "Vue", "Angular"],
+  "angular": ["TypeScript", "RxJS", "JavaScript", "React", "Vue"],
+  "vue": ["Nuxt.js", "Vuex", "JavaScript", "React", "Angular"],
+  "javascript": ["TypeScript", "Node.js", "React", "Vue", "Angular"],
+  "typescript": ["JavaScript", "Node.js", "React", "Angular"],
+  "node.js": ["Express", "NestJS", "JavaScript", "TypeScript", "npm"],
+  "java": ["Spring Boot", "Maven", "Gradle", "Hibernate", "JUnit", "microservices"],
+  "spring boot": ["Java", "microservices", "REST API", "Hibernate", "Maven"],
   "sql": ["PostgreSQL", "MySQL", "SQL Server", "database", "NoSQL"],
   "postgresql": ["SQL", "database", "MySQL", "pgAdmin"],
-  "mysql": ["SQL", "database", "PostgreSQL", "MariaDB"],
   "mongodb": ["NoSQL", "Mongoose", "database", "Redis"],
   "redis": ["caching", "MongoDB", "Memcached", "database"],
   "elasticsearch": ["Kibana", "Logstash", "ELK", "search", "Solr"],
-  "dynamodb": ["AWS", "NoSQL", "serverless", "database"],
-  "snowflake": ["data warehouse", "SQL", "dbt", "analytics", "BigQuery"],
-  "cassandra": ["NoSQL", "distributed", "database", "ScyllaDB"],
-
-  // Data / Streaming
   "kafka": ["event streaming", "RabbitMQ", "Spark", "data pipeline"],
   "spark": ["Hadoop", "data engineering", "PySpark", "Kafka", "Databricks"],
   "hadoop": ["Spark", "HDFS", "MapReduce", "data engineering", "Hive"],
-  "airflow": ["data pipeline", "ETL", "orchestration", "DAG", "data engineering"],
-  "dbt": ["data transformation", "SQL", "Snowflake", "analytics engineering"],
-
-  // Security
-  "cybersecurity": ["penetration testing", "SIEM", "SOC", "firewall", "encryption"],
-  "penetration testing": ["ethical hacking", "OWASP", "Burp Suite", "Kali Linux", "vulnerability"],
-  "cissp": ["security", "cybersecurity", "information security", "CISM"],
-  "ceh": ["ethical hacking", "penetration testing", "cybersecurity", "CompTIA Security+"],
-  "soc": ["SIEM", "incident response", "threat detection", "security operations"],
-
-  // Certifications
-  "aws certified": ["Solutions Architect", "Developer Associate", "SysOps", "cloud certification"],
-  "azure certified": ["AZ-900", "AZ-104", "AZ-305", "cloud certification"],
-  "ccna": ["Cisco", "networking", "CCNP", "routing", "switching"],
-  "ccnp": ["Cisco", "networking", "CCNA", "enterprise"],
-  "comptia": ["Security+", "Network+", "A+", "certification"],
-  "pmp": ["project management", "PMI", "PRINCE2", "Agile", "program management"],
-  "prince2": ["project management", "PMP", "methodology"],
-  "itil": ["IT service management", "ITSM", "incident management"],
-  "togaf": ["enterprise architecture", "framework", "IT architecture"],
-  "scrum master": ["CSM", "PSM", "Agile", "Scrum", "sprint"],
-
-  // Tools / Collaboration
-  "git": ["GitHub", "GitLab", "Bitbucket", "version control"],
-  "jira": ["Agile", "Scrum", "Confluence", "Kanban", "project management"],
-  "confluence": ["JIRA", "documentation", "wiki", "Atlassian"],
-  "figma": ["Sketch", "Adobe XD", "UI/UX", "design", "prototyping"],
-  "tableau": ["Power BI", "data visualization", "analytics", "dashboard"],
-  "power bi": ["Tableau", "data visualization", "analytics", "Microsoft"],
-
-  // Methodologies / Soft Skills
-  "agile": ["Scrum", "Kanban", "JIRA", "sprint", "product owner"],
-  "scrum": ["Agile", "Kanban", "JIRA", "sprint planning"],
-  "kanban": ["Agile", "Scrum", "lean", "workflow"],
-  "leadership": ["management", "team lead", "mentoring", "stakeholder management"],
-  "stakeholder management": ["leadership", "communication", "project management"],
-  "problem solving": ["analytical", "critical thinking", "troubleshooting"],
-  "communication": ["presentation", "stakeholder management", "collaboration"],
-
-  // Misc tech
-  "api": ["REST API", "GraphQL", "gRPC", "OpenAPI", "Swagger"],
-  "graphql": ["REST API", "Apollo", "API", "schema"],
-  "microservices": ["Docker", "Kubernetes", "API Gateway", "service mesh", "event-driven"],
-  "rest api": ["API", "GraphQL", "HTTP", "OpenAPI", "Swagger"],
-  "selenium": ["automation testing", "Playwright", "Cypress", "QA", "web scraping"],
-  "playwright": ["Selenium", "Cypress", "automation testing", "end-to-end testing"],
-
-  // Research
   "r&d": ["research", "innovation", "patents", "product development"],
-  "phd": ["research", "thesis", "publications", "doctorate"],
-
-  // H&S / Quality (kept for existing users)
   "iso 45001": ["ISO 9001", "ISO 14001", "OHSMS", "NEBOSH", "safety management"],
   "iso 9001": ["ISO 45001", "ISO 14001", "quality management", "QMS"],
   "nebosh": ["IOSH", "ISO 45001", "safety", "OSHA", "risk assessment"],
+  "phd": ["research", "thesis", "publications", "doctorate"],
+  "agile": ["Scrum", "Kanban", "JIRA", "sprint", "product owner"],
+  "scrum": ["Agile", "Kanban", "JIRA", "sprint planning"],
+  "jira": ["Agile", "Scrum", "Confluence", "Kanban", "project management"],
+  "figma": ["Sketch", "Adobe XD", "UI/UX", "design", "prototyping"],
+  "data science": ["machine learning", "statistics", "Python", "R", "pandas", "visualization"],
+  "devops": ["CI/CD", "Docker", "Kubernetes", "Terraform", "Jenkins", "monitoring"],
+  "cybersecurity": ["penetration testing", "SIEM", "SOC", "firewall", "encryption"],
+  "golang": ["Go", "microservices", "concurrency", "gRPC"],
+  "rust": ["systems programming", "WebAssembly", "memory safety"],
+  "c++": ["C", "systems programming", "embedded", "Qt", "game development"],
 };
 
 const kwSuggestionsBox = document.getElementById("kwSuggestionsBox");
@@ -746,21 +682,6 @@ function getExistingKeywords(textarea) {
   return (textarea.value || "").split(/[,;\n]+/).map(s => s.trim().toLowerCase()).filter(Boolean);
 }
 
-// Built-in expansion abbreviations for dynamic suggestions
-const KW_EXPANSIONS_SUGGEST = {
-  "ml": "machine learning", "ai": "artificial intelligence", "nlp": "natural language processing",
-  "dl": "deep learning", "cv": "computer vision", "phd": "Ph.D / doctorate",
-  "aws": "Amazon Web Services", "gcp": "Google Cloud Platform", "api": "application programming interface",
-  "ctf": "capture the flag", "bsc": "B.S / bachelor's", "ms": "M.S / master's",
-  "sre": "site reliability engineering", "llm": "large language model", "etl": "extract transform load",
-  "iac": "infrastructure as code", "qa": "quality assurance", "ui/ux": "user interface / user experience",
-  "ci/cd": "continuous integration / deployment", "saas": "software as a service",
-  "b2b": "business to business", "b2c": "business to consumer", "sdk": "software development kit",
-  "orm": "object-relational mapping", "ssr": "server-side rendering", "sso": "single sign-on",
-  "rbac": "role-based access control", "cdn": "content delivery network", "dns": "domain name system",
-  "vpn": "virtual private network", "ssl": "secure sockets layer / TLS",
-};
-
 function showKwSuggestions() {
   const token = getLastToken(kwInput);
   kwSuggestionsBox.innerHTML = "";
@@ -773,14 +694,10 @@ function showKwSuggestions() {
   const suggestions = [];
   const seen = new Set();
 
-  // Expansion abbreviation matches (e.g. typing "ml" suggests "machine learning")
-  for (const [abbr, fullForm] of Object.entries(KW_EXPANSIONS_SUGGEST)) {
-    if (abbr === token || abbr.startsWith(token)) {
-      if (!existing.has(fullForm.toLowerCase()) && !seen.has(fullForm.toLowerCase())) {
-        suggestions.push({ text: fullForm.split(" / ")[0], reason: abbr.toUpperCase() + " expands to" });
-        seen.add(fullForm.toLowerCase());
-      }
-    }
+  const typoTarget = KW_TYPO_HINTS[token];
+  if (typoTarget && !existing.has(typoTarget)) {
+    suggestions.push({ text: typoTarget, reason: "did you mean (typo)" });
+    seen.add(typoTarget);
   }
 
   for (const [key, related] of Object.entries(KW_RELATED)) {
@@ -824,7 +741,8 @@ function showKwSuggestions() {
     div.innerHTML = `<span class="sg-plus">+</span> <span>${sg.text}</span> <span class="sg-label">${sg.reason}</span>`;
     div.addEventListener("mousedown", (e) => {
       e.preventDefault();
-      insertSuggestion(sg.text);
+      if (e.shiftKey) insertSuggestionBundle(sg.text);
+      else insertSuggestion(sg.text);
     });
     kwSuggestionsBox.appendChild(div);
   }
@@ -842,6 +760,37 @@ function insertSuggestion(text) {
   kwInput.focus();
   const newPos = (prefix + text + ", ").length;
   kwInput.selectionStart = kwInput.selectionEnd = newPos;
+  kwSuggestionsBox.classList.remove("visible");
+  saveKwSettings().catch(() => {});
+  setTimeout(showKwSuggestions, 50);
+}
+
+/** Insert primary keyword plus related terms (from KW_RELATED) not already listed */
+function insertSuggestionBundle(primary) {
+  const low = primary.toLowerCase();
+  const related = KW_RELATED[low];
+  const extra = related ? related.slice(0, 6) : [];
+  const toAdd = [primary];
+  const existing = new Set(getExistingKeywords(kwInput));
+  for (const r of extra) {
+    const rl = r.toLowerCase();
+    if (!existing.has(rl) && !toAdd.some((t) => t.toLowerCase() === rl)) toAdd.push(r);
+  }
+  if (low === "pytorch" || low === "tensorflow" || low === "keras") {
+    for (const x of ["machine learning", "deep learning"]) {
+      if (!existing.has(x) && !toAdd.some((t) => t.toLowerCase() === x)) toAdd.push(x);
+    }
+  }
+  const val = kwInput.value || "";
+  const cursor = kwInput.selectionStart || val.length;
+  const before = val.slice(0, cursor);
+  const after = val.slice(cursor);
+  const lastComma = before.lastIndexOf(",");
+  const prefix = lastComma >= 0 ? before.slice(0, lastComma + 1) + " " : "";
+  const block = toAdd.join(", ") + ", ";
+  kwInput.value = prefix + block + after.trimStart();
+  kwInput.focus();
+  kwInput.selectionStart = kwInput.selectionEnd = (prefix + block).length;
   kwSuggestionsBox.classList.remove("visible");
   saveKwSettings().catch(() => {});
   setTimeout(showKwSuggestions, 50);
@@ -904,7 +853,7 @@ btnKwGo.addEventListener("click", async () => {
     if (!cfg.booleanQuery) {
       kwStatusBox.classList.add("visible");
       kwLogEl.innerHTML = "";
-      kwLog("✗", "Paste a boolean search query.");
+      kwLog("✗", "Enter a boolean query (AND / OR / NOT).");
       setKwStatus("error", "Need boolean query");
       return;
     }
@@ -934,7 +883,6 @@ btnKwGo.addEventListener("click", async () => {
 
   try {
     if (workers > 1) {
-      // Parallel mode: harvest URLs first, then hand off to background.js
       await ensureKeywordCore(tab.id);
       const [harvest] = await chrome.scripting.executeScript({
         target: { tabId: tab.id, allFrames: false },
@@ -963,9 +911,9 @@ btnKwGo.addEventListener("click", async () => {
       kwLog("✓", "Found " + urls.length + " profiles. Starting " + workers + " parallel workers…");
       const resp = await chrome.runtime.sendMessage({
         type: "srStartParallelKeywordQueue",
-        urls: urls,
+        urls,
         config: cfg,
-        workers: workers,
+        workers,
         returnUrl: tab.url,
       });
       if (resp?.ok) {
@@ -977,7 +925,6 @@ btnKwGo.addEventListener("click", async () => {
         setKwStatus("error", "Queue failed");
       }
     } else {
-      // Single-tab mode (original behavior)
       await ensureKeywordCore(tab.id);
       const [inj] = await chrome.scripting.executeScript({
         target: { tabId: tab.id, allFrames: false },
@@ -988,9 +935,13 @@ btnKwGo.addEventListener("click", async () => {
       const lines = out?.log || [];
       for (const e of lines) kwLog(e.ok ? "✓" : "✗", e.msg);
       if (out?.ok && out?.queued) {
-        const modeHint = out.mode === "click"
-          ? "Click-through queue: opening each name."
-          : "URL queue: jumping to each profile.";
+        const modeHint =
+          out.mode === "click"
+            ? "Click-through queue: opening each name."
+            : "URL queue: jumping to each profile.";
+        if (cfg.mode === "boolean") {
+          kwLog("✓", "Boolean mode: profiles are scanned only; Move forward is never clicked.");
+        }
         kwLog("✓", modeHint);
         kwLog("✓", "Keep this browser tab focused; results saved when finished.");
         const modeLabel = cfg.mode === "boolean" ? "Boolean search" : "Keyword search";
@@ -1010,16 +961,13 @@ btnKwGo.addEventListener("click", async () => {
 btnKwStop.addEventListener("click", async () => {
   kwStatusBox.classList.add("visible");
   kwLogEl.innerHTML = "";
-
-  // Stop parallel workers via background.js
   try {
     await chrome.runtime.sendMessage({ type: "srStopParallelKeywordQueue" });
   } catch (_) {}
 
-  // Also stop single-tab queue
   const tab = await getSmartRecruitersTab();
   if (!tab) {
-    kwLog("✓", "Queue cleared.");
+    kwLog("✓", "Parallel queue stopped (if any). Open a SmartRecruiters tab to clear single-tab queue.");
     setKwStatus("salary-done", "Stopped");
     return;
   }

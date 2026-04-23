@@ -22,37 +22,38 @@
     "nebsh": ["nebsh igc", "international general certificate"],
     "ctf": ["capture the flag", "capture-the-flag"],
     "aws": ["amazon web services"],
-    "amazon web services": ["aws"],
     "gcp": ["google cloud platform", "google cloud"],
     "api": ["application programming interface", "apis"],
-    "tensorflow": ["tensor flow", "tensor-flow"],
-    "pytorch": ["py torch", "py-torch"],
-    "azure": ["microsoft azure", "ms azure"],
-    "kubernetes": ["k8s"],
-    "k8s": ["kubernetes"],
-    "scikit-learn": ["scikit learn", "sklearn", "sk-learn"],
-    "sklearn": ["scikit-learn", "scikit learn"],
-    "opencv": ["open cv", "open-cv"],
-    "fastapi": ["fast api", "fast-api"],
-    "nodejs": ["node js", "node.js", "node-js"],
-    "node.js": ["nodejs", "node js", "node-js"],
-    "devops": ["dev ops", "dev-ops"],
-    "github": ["git hub", "git-hub"],
-    "gitlab": ["git lab", "git-lab"],
-    "chatgpt": ["chat gpt", "chat-gpt"],
-    "openai": ["open ai", "open-ai"],
-    "huggingface": ["hugging face", "hugging-face"],
-    "hugging face": ["huggingface"],
-    "langchain": ["lang chain", "lang-chain"],
-    "powerbi": ["power bi", "power-bi"],
-    "power bi": ["powerbi"],
-    "tableau": [],
-    "mongodb": ["mongo db", "mongo-db"],
-    "postgresql": ["postgres", "postgre sql"],
-    "postgres": ["postgresql"],
-    "mysql": ["my sql", "my-sql"],
-    "nosql": ["no sql", "no-sql"],
-    "graphql": ["graph ql", "graph-ql"],
+    "pytorch": ["py torch", "py-torch", "torch", "pytorch lightning"],
+    "tensorflow": ["tensor flow", "tensor-flow", "tensorflow 2", "tf2", "tf.keras", "tf"],
+    "keras": ["tf.keras", "deep learning"],
+    "llm": ["large language model", "llms"],
+    "llms": ["large language models", "llm"],
+    "rag": ["retrieval augmented generation", "retrieval-augmented generation"],
+    "transformer": ["transformers"],
+    "transformers": ["transformer"],
+    "azure": ["microsoft azure", "ms azure", "azure devops", "azure cloud"],
+    "resilience": ["resiliency", "resilient"],
+    "resiliency": ["resilience", "resilient"],
+    "fmcg": ["fast moving consumer goods", "fast-moving consumer goods"],
+    "cpg": ["consumer packaged goods", "packaged goods"],
+    "ner": ["named entity recognition"],
+    "ocr": ["optical character recognition"],
+    "ir": ["information retrieval"],
+    "idp": ["intelligent document processing"],
+  };
+
+  /** Common misspellings / variants → canonical key (lowercase) used before expansion + matching */
+  var KEYWORD_TYPO_ALIASES = {
+    pytroch: "pytorch",
+    pytoch: "pytorch",
+    tensorlfow: "tensorflow",
+    tensorfow: "tensorflow",
+    tenserflow: "tensorflow",
+    azuer: "azure",
+    resilence: "resilience",
+    reslience: "resilience",
+    resliency: "resiliency",
   };
 
   var MOVE_FORWARD_ID = "st-moveForward";
@@ -61,17 +62,6 @@
 
   function sleep(ms) {
     return new Promise(function (r) { setTimeout(r, ms); });
-  }
-
-  /** Randomized delay — returns ms ± ~35% spread to avoid fixed-cadence bot detection. */
-  function jitter(baseMs) {
-    var lo = Math.round(baseMs * 0.65);
-    var hi = Math.round(baseMs * 1.35);
-    return lo + Math.floor(Math.random() * (hi - lo + 1));
-  }
-
-  function sleepJitter(baseMs) {
-    return sleep(jitter(baseMs));
   }
 
   function isVisible(el, win) {
@@ -187,59 +177,18 @@
     return cleaned;
   }
 
-  /** Same format as Python keyword_expansions.txt: abbr|synonym1, synonym2 (# line comments ok) */
-  function parseCustomExpansionsBlock(text) {
-    var extra = {};
-    if (!text || !String(text).trim()) return extra;
-    var lines = String(text).split(/\n/);
-    for (var i = 0; i < lines.length; i++) {
-      var line = lines[i].trim();
-      if (!line || line.charAt(0) === "#") continue;
-      var pipe = line.indexOf("|");
-      if (pipe < 0) continue;
-      var abbr = line.slice(0, pipe).trim().toLowerCase();
-      var rest = line.slice(pipe + 1);
-      if (!abbr) continue;
-      var parts = rest.split(/[,;]+/);
-      for (var j = 0; j < parts.length; j++) {
-        var form = parts[j].trim();
-        if (!form) continue;
-        if (!extra[abbr]) extra[abbr] = [];
-        extra[abbr].push(form);
-      }
-    }
-    return extra;
-  }
-
-  function buildExpansionTable(customBlock) {
+  function buildExpansionTable() {
     var table = {};
     for (var k in KEYWORD_EXPANSIONS) {
       if (Object.prototype.hasOwnProperty.call(KEYWORD_EXPANSIONS, k)) {
         table[k] = KEYWORD_EXPANSIONS[k].slice();
       }
     }
-    var custom = parseCustomExpansionsBlock(customBlock);
-    for (var abbr in custom) {
-      if (!Object.prototype.hasOwnProperty.call(custom, abbr)) continue;
-      if (!table[abbr]) table[abbr] = [];
-      for (var i = 0; i < custom[abbr].length; i++) {
-        var f = custom[abbr][i];
-        var fl = String(f).toLowerCase();
-        var dup = false;
-        for (var j = 0; j < table[abbr].length; j++) {
-          if (String(table[abbr][j]).toLowerCase() === fl) {
-            dup = true;
-            break;
-          }
-        }
-        if (!dup) table[abbr].push(f);
-      }
-    }
     return table;
   }
 
   function expandKeywords(keywords, expansionTable) {
-    expansionTable = expansionTable || buildExpansionTable("");
+    expansionTable = expansionTable || buildExpansionTable();
     var expanded = keywords.slice();
     var expandedLower = {};
     for (var i = 0; i < expanded.length; i++) expandedLower[expanded[i].toLowerCase()] = true;
@@ -258,23 +207,50 @@
     return expanded;
   }
 
-  function countCustomExpansionRules(text) {
-    if (!text || !String(text).trim()) return 0;
-    var n = 0;
-    var lines = String(text).split(/\n/);
-    for (var i = 0; i < lines.length; i++) {
-      var line = lines[i].trim();
-      if (line && line.charAt(0) !== "#" && line.indexOf("|") >= 0) n++;
+  function applyTypoAliases(keywords) {
+    var out = [];
+    for (var i = 0; i < keywords.length; i++) {
+      var raw = (keywords[i] || "").trim();
+      if (!raw) continue;
+      var low = raw.toLowerCase();
+      var canon = KEYWORD_TYPO_ALIASES[low];
+      out.push(canon ? canon : raw);
     }
-    return n;
+    return out;
   }
 
-  function resolveKeywords(rawInput, customExpansionsText) {
-    var table = buildExpansionTable(customExpansionsText || "");
+  function resolveKeywords(rawInput) {
+    var table = buildExpansionTable();
     var parsed = parseKeywordsFromString(rawInput);
-    var canon = canonicalizeKeywords(parsed);
+    var typoFixed = applyTypoAliases(parsed);
+    var canon = canonicalizeKeywords(typoFixed);
     var expanded = expandKeywords(canon, table);
     return canonicalizeKeywords(expanded);
+  }
+
+  /** Synonym forms for one boolean leaf (same table as comma keywords, plus typo table). */
+  function expandOneBooleanTerm(term) {
+    var t = (term || "").trim();
+    if (!t) return [];
+    var low = t.toLowerCase();
+    if (KEYWORD_TYPO_ALIASES[low]) t = KEYWORD_TYPO_ALIASES[low];
+    var table = buildExpansionTable();
+    var out = [];
+    var seen = {};
+    function push(s) {
+      var x = (s || "").trim();
+      if (!x) return;
+      var k = x.toLowerCase();
+      if (seen[k]) return;
+      seen[k] = true;
+      out.push(x);
+    }
+    push(t);
+    var forms = table[t.toLowerCase()];
+    if (forms) {
+      for (var i = 0; i < forms.length; i++) push(forms[i]);
+    }
+    return out;
   }
 
   /* ── Text normalization (ported from req.py _normalize_for_kw) ── */
@@ -286,237 +262,176 @@
       if (typeof s.normalize === "function") s = s.normalize("NFKC");
     } catch (_) {}
     s = s.replace(/[\u200B-\u200D\uFEFF]/g, "");
+    s = s.replace(/\u00AD/g, "");
+    s = s.replace(/\u2060/g, "");
     s = s.replace(/\u00A0/g, " ").replace(/\u202F/g, " ").replace(/\u2007/g, " ");
+    s = s.replace(/\u00B7/g, " ").replace(/\u2022/g, " ");
     s = s.replace(/\s+/g, " ");
     return s.trim();
   }
 
-  /* ── Ensure the Resume sub-tab is active before extraction ── */
+  /* ── Excluded regions: sidebar / job metadata that should NOT be scanned ── */
 
-  async function ensureResumeTabActive(doc, win) {
-    var root = doc.body || doc.documentElement;
+  var EXCLUDED_SELECTORS = [
+    "sr-job-application-sidebar",
+    "sr-job-application-details",
+    "sr-job-application-overview",
+    '[class*="job-application-sidebar"]',
+    '[class*="job-application-details"]',
+    "aside sr-job-application-sidebar",
+    "aside",
+  ];
 
-    // Strategy 1: Look for the Profile/Resume toggle buttons near the resume viewer
-    // These are typically button elements or spl-button elements in a toggle group
-    var candidates = [];
-    try { candidates = candidates.concat(Array.from(doc.querySelectorAll('button[role="tab"], [role="tab"]'))); } catch (_) {}
-    try { candidates = candidates.concat(queryDeepSelectorAll(root, win, "spl-button")); } catch (_) {}
-    try { candidates = candidates.concat(Array.from(doc.querySelectorAll("button"))); } catch (_) {}
-
-    for (var i = 0; i < candidates.length; i++) {
-      var el = candidates[i];
-      var txt = ((el.textContent || el.innerText || "") + "").replace(/\s+/g, " ").trim();
-      if (!/^\s*Resume\s*$/i.test(txt)) continue;
-
-      // Avoid clicking sidebar links (Attachments > Resume) — only click tab/toggle buttons
-      var tag = (el.tagName || "").toLowerCase();
-      var role = "";
-      try { role = (el.getAttribute("role") || ""); } catch (_) {}
-      var isLikelyTab = (tag === "button" || tag === "spl-button" || role === "tab" ||
-        (el.closest && (el.closest('[role="tablist"]') || el.closest(".spl-toggle-group") || el.closest("spl-toggle-group"))));
-      if (!isLikelyTab) continue;
-
-      var clickTarget = el;
-      try { clickTarget.scrollIntoView({ block: "center", behavior: "smooth" }); } catch (_) {}
-      await sleepJitter(80);
-      dispatchClickAtElementCenter(clickTarget, win, 0.3 + Math.random() * 0.4);
-      try { clickTarget.click(); } catch (_) {}
-      await sleepJitter(650);
-      return true;
-    }
-
-    // Strategy 2: broader search for any element that looks like the Resume toggle
-    var links = [];
-    try { links = Array.from(doc.querySelectorAll("a")); } catch (_) {}
-    for (var j = 0; j < links.length; j++) {
-      var aEl = links[j];
-      var aTxt = ((aEl.textContent || aEl.innerText || "") + "").replace(/\s+/g, " ").trim();
-      if (!/^\s*Resume\s*$/i.test(aTxt)) continue;
-      // Only click if it's in a toggle/tab area, not the sidebar Attachments list
+  function getExcludedText(doc) {
+    var parts = [];
+    var root = doc.querySelector("#st-candidateView") || doc.body;
+    if (!root) return "";
+    for (var i = 0; i < EXCLUDED_SELECTORS.length; i++) {
       try {
-        if (aEl.closest && (aEl.closest('[role="tablist"]') || aEl.closest(".spl-toggle-group") || aEl.closest("spl-toggle-group"))) {
-          try { aEl.scrollIntoView({ block: "center", behavior: "smooth" }); } catch (_) {}
-          await sleepJitter(80);
-          dispatchClickAtElementCenter(aEl, win, 0.3 + Math.random() * 0.4);
-          try { aEl.click(); } catch (_) {}
-          await sleepJitter(650);
-          return true;
+        var els = root.querySelectorAll(EXCLUDED_SELECTORS[i]);
+        for (var j = 0; j < els.length; j++) {
+          var t = (els[j].innerText || els[j].textContent || "").replace(/\s+/g, " ").trim();
+          if (t.length > 5) parts.push(t);
         }
       } catch (_) {}
     }
-
-    return false;
+    return parts.join("\n\n");
   }
 
-  /* ── Poll for resume text until content loads (replaces fixed sleep) ── */
-
-  async function extractResumeWithRetry(doc, win, maxWaitMs) {
-    var MIN_LEN = 200;
-    var POLL_INTERVAL = 400;
-    var elapsed = 0;
-    var text = "";
-
-    // First try immediately
-    try { text = getResumeText(doc); } catch (_) {}
-    if (text.length >= MIN_LEN) return text;
-
-    // Click the Resume sub-tab in case "Profile" is active
-    await ensureResumeTabActive(doc, win);
-    try { text = getResumeText(doc); } catch (_) {}
-    if (text.length >= MIN_LEN) return text;
-
-    // Poll until resume loads or timeout
-    while (elapsed < maxWaitMs) {
-      await sleep(POLL_INTERVAL);
-      elapsed += POLL_INTERVAL;
-      try { text = getResumeText(doc); } catch (_) {}
-      if (text.length >= MIN_LEN) return text;
-    }
-
-    // Final attempt: click Overview tab then Resume sub-tab again
-    var overviewTab = null;
-    try {
-      var allTabs = Array.from(doc.querySelectorAll("a > spl-tab-label > div, a > spl-tab-label, [role='tab']"));
-      for (var i = 0; i < allTabs.length; i++) {
-        var tabText = ((allTabs[i].textContent || "") + "").replace(/\s+/g, " ").trim().toLowerCase();
-        if (/^overview$/.test(tabText)) { overviewTab = allTabs[i]; break; }
+  function stripExcludedText(allText, excludedText) {
+    if (!excludedText || !allText) return allText;
+    var phrases = excludedText.split(/\n\n/);
+    for (var i = 0; i < phrases.length; i++) {
+      var p = phrases[i].trim();
+      if (p.length < 10) continue;
+      var idx = allText.indexOf(p);
+      while (idx >= 0) {
+        allText = allText.substring(0, idx) + " " + allText.substring(idx + p.length);
+        idx = allText.indexOf(p);
       }
-    } catch (_) {}
-    if (overviewTab) {
-      var clickTab = overviewTab;
-      try { var pA = overviewTab.closest && overviewTab.closest("a"); if (pA) clickTab = pA; } catch (_) {}
-      try { clickTab.click(); } catch (_) {}
-      await sleep(500);
-      await ensureResumeTabActive(doc, win);
-      await sleep(500);
-      try { text = getResumeText(doc); } catch (_) {}
     }
-
-    return text;
+    return allText.replace(/\s+/g, " ").trim();
   }
 
-  /* ── Deep text extraction that pierces all shadow DOM boundaries ── */
+  /* ── Resume text extraction from DOM (ported from req.py get_dom_resume_text) ── */
 
-  function getDeepElementText(el) {
-    var parts = [];
+  function collectDeepText(root, minChunk) {
+    minChunk = minChunk || 30;
+    var chunks = [];
     var visited = new Set();
+
+    function push(raw) {
+      var t = (raw || "").replace(/\s+/g, " ").trim();
+      if (t.length >= minChunk) chunks.push(t);
+    }
+
     function walk(node) {
       if (!node || visited.has(node)) return;
       visited.add(node);
-      if (node.nodeType === 3) {
-        var t = (node.textContent || "").trim();
-        if (t) parts.push(t);
-        return;
-      }
       if (node.nodeType === 1) {
-        var tag = (node.tagName || "").toLowerCase();
-        if (tag === "script" || tag === "style" || tag === "noscript") return;
+        try { push(node.innerText || node.textContent || ""); } catch (_) {}
       }
       if (node.shadowRoot) walk(node.shadowRoot);
-      var ch = node.childNodes;
-      if (ch) { for (var i = 0; i < ch.length; i++) walk(ch[i]); }
+      if (node.childNodes) {
+        for (var i = 0; i < node.childNodes.length; i++) walk(node.childNodes[i]);
+      }
     }
-    walk(el);
-    return parts.join(" ").replace(/\s+/g, " ").trim();
-  }
 
-  /* ── Resume text extraction from DOM ── */
+    walk(root);
+    return chunks;
+  }
 
   function getResumeText(doc) {
     var root = doc.querySelector("#st-candidateView") || doc.body;
-    var MIN = 200;
-
-    // Phase 1: precise resume selectors — try direct, shadow root, and deep walk
-    var preciseSelectors = [
+    if (!root) return "";
+    var selectors = [
       "sr-resume-viewer",
       "sr-candidate-resume",
       "sr-resume",
       '[data-testid*="resume"]',
+      '[data-testid*="Resume"]',
+      '[class*="resume"]',
+      '[id*="resume"]',
     ];
-    for (var i = 0; i < preciseSelectors.length; i++) {
-      try {
-        var el = root.querySelector(preciseSelectors[i]);
-        if (!el) continue;
-        var t = extractTextFromElement(el, MIN);
-        if (t) return t;
-      } catch (_) {}
+    var chunks = [];
+    var minChunk = 30;
+
+    function pushText(raw) {
+      var t = (raw || "").replace(/\s+/g, " ").trim();
+      if (t.length >= minChunk) chunks.push(t);
     }
 
-    // Phase 2: shadow DOM deep search for resume web components
-    var resumeEl = null;
-    var sVisited = new Set();
-    function walkForResume(node) {
-      if (!node || sVisited.has(node) || resumeEl) return;
-      sVisited.add(node);
-      if (node.nodeType === 1) {
-        var tag = (node.tagName || "").toLowerCase();
-        if (tag === "sr-resume-viewer" || tag === "sr-candidate-resume" || tag === "sr-resume") {
-          resumeEl = node; return;
+    function collectFromEl(el) {
+      if (!el) return;
+      try {
+        pushText(el.innerText || el.textContent || "");
+        if (el.shadowRoot) {
+          try {
+            pushText(el.shadowRoot.innerText || el.shadowRoot.textContent || "");
+            var deep = collectDeepText(el.shadowRoot, minChunk);
+            for (var d = 0; d < deep.length; d++) chunks.push(deep[d]);
+          } catch (_) {}
         }
-        try {
-          var tid = (node.getAttribute && node.getAttribute("data-testid")) || "";
-          if (/resume/i.test(tid)) {
-            var deep = getDeepElementText(node);
-            if (deep.length > MIN) { resumeEl = node; return; }
-          }
-        } catch (_) {}
-      }
-      if (node.shadowRoot) walkForResume(node.shadowRoot);
-      if (node.childNodes) {
-        for (var c = 0; c < node.childNodes.length; c++) walkForResume(node.childNodes[c]);
-      }
-    }
-    walkForResume(root);
-    if (resumeEl) {
-      var t2 = extractTextFromElement(resumeEl, MIN);
-      if (t2) return t2;
-    }
-
-    // Phase 3: broader class/id selectors, skip small UI elements
-    var broadSelectors = ['[class*="resume"]', '[id*="resume"]'];
-    for (var j = 0; j < broadSelectors.length; j++) {
-      try {
-        var el2 = root.querySelector(broadSelectors[j]);
-        if (!el2) continue;
-        var tag2 = (el2.tagName || "").toLowerCase();
-        if (tag2 === "a" || tag2 === "button" || tag2 === "label" || tag2 === "span" || tag2 === "spl-button") continue;
-        var t3 = extractTextFromElement(el2, MIN);
-        if (t3) return t3;
       } catch (_) {}
     }
 
-    // Phase 4: deep-walk entire candidate view, collect ALL text from shadow DOMs
-    var fullDeep = getDeepElementText(root);
-    if (fullDeep.length > MIN) return fullDeep;
+    for (var i = 0; i < selectors.length; i++) {
+      try {
+        var els = root.querySelectorAll(selectors[i]);
+        for (var j = 0; j < els.length; j++) collectFromEl(els[j]);
+      } catch (_) {}
+    }
 
-    // Phase 5: absolute fallback — document body deep text
-    return getDeepElementText(doc.body || doc.documentElement);
+    var fullRoot = (root.innerText || root.textContent || "").replace(/\s+/g, " ").trim();
+    var merged = chunks.length ? chunks.join("\n\n") : "";
+    if (merged && fullRoot) return merged + "\n\n" + fullRoot;
+    return merged || fullRoot;
   }
 
-  function extractTextFromElement(el, minLen) {
-    // Try innerText (respects rendering, but doesn't pierce shadow DOM)
-    try {
-      var t1 = (el.innerText || "").replace(/\s+/g, " ").trim();
-      if (t1.length >= minLen) return t1;
-    } catch (_) {}
-    // Try textContent (all text nodes in light DOM)
-    try {
-      var t2 = (el.textContent || "").replace(/\s+/g, " ").trim();
-      if (t2.length >= minLen) return t2;
-    } catch (_) {}
-    // Try one level of shadow root
-    try {
-      if (el.shadowRoot) {
-        var t3 = (el.shadowRoot.textContent || "").replace(/\s+/g, " ").trim();
-        if (t3.length >= minLen) return t3;
-      }
-    } catch (_) {}
-    // Deep recursive walk — pierces all nested shadow DOMs
-    try {
-      var t4 = getDeepElementText(el);
-      if (t4.length >= minLen) return t4;
-    } catch (_) {}
-    return null;
+  function getProfileOverviewText(doc) {
+    var root = doc.querySelector("#st-candidateView") || doc.body;
+    if (!root) return "";
+    var selectors = [
+      '[data-testid*="profile"]',
+      '[data-testid*="Profile"]',
+      '[class*="profile"]',
+      '[id*="profile"]',
+      '[data-testid*="overview"]',
+      '[class*="overview"]',
+      '[class*="skills"]',
+      '[class*="summary"]',
+      '[class*="experience"]',
+      '[class*="education"]',
+      "sr-candidate-profile",
+      "sr-candidate-details",
+      "sr-candidate-overview",
+    ];
+    var chunks = [];
+
+    for (var i = 0; i < selectors.length; i++) {
+      try {
+        var els = root.querySelectorAll(selectors[i]);
+        for (var j = 0; j < els.length; j++) {
+          try {
+            var t = (els[j].innerText || els[j].textContent || "").replace(/\s+/g, " ").trim();
+            if (t.length > 30) chunks.push(t);
+          } catch (_) {}
+          if (els[j].shadowRoot) {
+            var deep = collectDeepText(els[j].shadowRoot, 30);
+            for (var d = 0; d < deep.length; d++) chunks.push(deep[d]);
+          }
+        }
+      } catch (_) {}
+    }
+    return chunks.join("\n\n");
+  }
+
+  function getFullPageText(doc) {
+    var root = doc.querySelector("#st-candidateView") || doc.body || doc.documentElement;
+    if (!root) return "";
+    var deep = collectDeepText(root, 20);
+    if (deep.length) return deep.join("\n\n");
+    return (root.innerText || root.textContent || "").replace(/\s+/g, " ").trim();
   }
 
   function getScreeningText(doc, win) {
@@ -551,11 +466,99 @@
     return "";
   }
 
-  /* ── Full profile text (skills, tags, headers — everything Ctrl+F sees) ── */
+  async function ensureResumeTabActive(doc, win) {
+    var tabSelectors = [
+      'button[data-testid="resume-tab"]',
+      'button[data-testid="Resume"]',
+      '[role="tab"]',
+      'a[href*="resume"]',
+      'button',
+    ];
+    var root = doc.querySelector("#st-candidateView") || doc.body;
+    if (!root) return false;
 
-  function getFullProfileText(doc) {
-    var root = doc.querySelector("#st-candidateView") || doc.body || doc.documentElement;
-    return getDeepElementText(root);
+    function findResumeTab(r) {
+      for (var s = 0; s < tabSelectors.length; s++) {
+        try {
+          var els = r.querySelectorAll(tabSelectors[s]);
+          for (var i = 0; i < els.length; i++) {
+            var txt = (els[i].textContent || els[i].innerText || "").trim().toLowerCase();
+            if (txt === "resume" || txt === "résumé" || txt === "cv") return els[i];
+          }
+        } catch (_) {}
+      }
+      var visited = new Set();
+      var found = null;
+      function walkSR(node) {
+        if (!node || visited.has(node) || found) return;
+        visited.add(node);
+        if (node.nodeType === 1) {
+          var t = (node.textContent || "").trim().toLowerCase();
+          if ((t === "resume" || t === "résumé" || t === "cv") &&
+              (node.tagName === "BUTTON" || node.tagName === "A" ||
+               (node.getAttribute && node.getAttribute("role") === "tab"))) {
+            found = node;
+            return;
+          }
+        }
+        if (node.shadowRoot) walkSR(node.shadowRoot);
+        if (node.childNodes) {
+          for (var c = 0; c < node.childNodes.length; c++) walkSR(node.childNodes[c]);
+        }
+      }
+      walkSR(r);
+      return found;
+    }
+
+    var tab = findResumeTab(root);
+    if (!tab) return false;
+
+    try {
+      tab.scrollIntoView({ block: "center", behavior: "instant" });
+      await sleep(100);
+      tab.click();
+      await sleep(1500);
+    } catch (_) {}
+    return true;
+  }
+
+  async function ensureProfileTabActive(doc, win) {
+    var root = doc.querySelector("#st-candidateView") || doc.body;
+    if (!root) return false;
+
+    function findProfileTab(r) {
+      var visited = new Set();
+      var found = null;
+      function walkSR(node) {
+        if (!node || visited.has(node) || found) return;
+        visited.add(node);
+        if (node.nodeType === 1) {
+          var t = (node.textContent || "").trim().toLowerCase();
+          if (t === "profile" &&
+              (node.tagName === "BUTTON" || node.tagName === "A" ||
+               (node.getAttribute && node.getAttribute("role") === "tab"))) {
+            found = node;
+            return;
+          }
+        }
+        if (node.shadowRoot) walkSR(node.shadowRoot);
+        if (node.childNodes) {
+          for (var c = 0; c < node.childNodes.length; c++) walkSR(node.childNodes[c]);
+        }
+      }
+      walkSR(r);
+      return found;
+    }
+
+    var tab = findProfileTab(root);
+    if (!tab) return false;
+    try {
+      tab.scrollIntoView({ block: "center", behavior: "instant" });
+      await sleep(100);
+      tab.click();
+      await sleep(1000);
+    } catch (_) {}
+    return true;
   }
 
   /* ── Keyword matching (ported from req.py find_keyword_hits) ── */
@@ -598,7 +601,9 @@
    */
   function findKeywordHits(texts, keywords, opts) {
     opts = opts || {};
-    var maxItems = Math.min(200, Math.max(1, parseInt(opts.maxItems, 10) || 50));
+    var rawCap = parseInt(opts.maxItems, 10);
+    var maxItems = Number.isFinite(rawCap) && rawCap > 0 ? Math.min(15000, rawCap) : 50;
+    var scanEveryKeyword = !!(opts && opts.scanEveryKeyword);
     var joined =
       typeof texts === "string"
         ? texts
@@ -611,7 +616,7 @@
     var seenLower = {};
 
     for (var i = 0; i < keywords.length; i++) {
-      if (found.length >= maxItems) break;
+      if (!scanEveryKeyword && found.length >= maxItems) break;
       var kwDisp = (keywords[i] || "").trim();
       if (!kwDisp) continue;
       var kwKey = kwDisp;
@@ -622,7 +627,7 @@
       var kwNorm = normalizeForKw(kwKey);
       if (!kwNorm) continue;
 
-      // LinkedIn Recruiter wildcard: trailing * means prefix match
+      // Trailing * = prefix match (LinkedIn-style wildcard)
       var isWildcard = kwNorm.charAt(kwNorm.length - 1) === "*";
       if (isWildcard) {
         kwNorm = kwNorm.slice(0, -1).replace(/\s+$/, "");
@@ -632,12 +637,9 @@
       var count = 0;
       var src = sepFlexiblePatternSource(kwNorm);
       if (isWildcard && src) {
-        // Replace trailing word-boundary with optional trailing chars for prefix matching
         var tail = "(?![A-Za-z0-9])";
         var tailIdx = src.lastIndexOf(tail);
-        if (tailIdx >= 0) {
-          src = src.slice(0, tailIdx) + "[A-Za-z0-9]*";
-        }
+        if (tailIdx >= 0) src = src.slice(0, tailIdx) + "[A-Za-z0-9]*";
       }
       if (src) {
         try {
@@ -672,42 +674,42 @@
     return { hits: found, hitCount: found.length };
   }
 
-  /* ── Boolean search parser (LinkedIn Recruiter syntax) ── */
+  /* ── Boolean search parser (LinkedIn Recruiter–style syntax) ── */
 
-  /**
-   * Tokenizer: splits a boolean query string into tokens.
-   * Token types: AND, OR, NOT, LPAREN, RPAREN, TERM (unquoted), PHRASE (quoted)
-   */
   function tokenizeBoolean(input) {
     var tokens = [];
     var i = 0;
     var s = String(input || "");
     while (i < s.length) {
-      // skip whitespace and newlines
-      if (/\s/.test(s[i])) { i++; continue; }
-
-      // quoted phrase
+      if (/\s/.test(s[i])) {
+        i++;
+        continue;
+      }
       if (s[i] === '"' || s[i] === "\u201C" || s[i] === "\u201D") {
         var closeChars = ['"', "\u201C", "\u201D"];
         i++;
         var start = i;
         while (i < s.length && closeChars.indexOf(s[i]) < 0) i++;
         var phrase = s.slice(start, i).trim();
-        if (i < s.length) i++; // skip closing quote
+        if (i < s.length) i++;
         if (phrase) tokens.push({ type: "PHRASE", value: phrase });
         continue;
       }
-
-      // parentheses
-      if (s[i] === "(") { tokens.push({ type: "LPAREN" }); i++; continue; }
-      if (s[i] === ")") { tokens.push({ type: "RPAREN" }); i++; continue; }
-
-      // read a word (anything not whitespace, not parens, not quote)
+      if (s[i] === "(") {
+        tokens.push({ type: "LPAREN" });
+        i++;
+        continue;
+      }
+      if (s[i] === ")") {
+        tokens.push({ type: "RPAREN" });
+        i++;
+        continue;
+      }
       var wStart = i;
-      while (i < s.length && !/\s/.test(s[i]) && s[i] !== "(" && s[i] !== ")" && s[i] !== '"' && s[i] !== "\u201C" && s[i] !== "\u201D") i++;
+      while (i < s.length && !/\s/.test(s[i]) && s[i] !== "(" && s[i] !== ")" && s[i] !== '"' && s[i] !== "\u201C" && s[i] !== "\u201D")
+        i++;
       var word = s.slice(wStart, i);
       if (!word) continue;
-
       var upper = word.toUpperCase();
       if (upper === "AND") tokens.push({ type: "AND" });
       else if (upper === "OR") tokens.push({ type: "OR" });
@@ -717,28 +719,21 @@
     return tokens;
   }
 
-  /**
-   * Recursive descent parser for boolean expressions.
-   * Grammar:
-   *   expression → or_expr
-   *   or_expr    → and_expr (OR and_expr)*
-   *   and_expr   → not_expr ((AND | implicit) not_expr)*
-   *   not_expr   → NOT? atom
-   *   atom       → PHRASE | TERM | ( expression )
-   *
-   * Returns an AST node: { type: "AND"|"OR"|"NOT"|"TERM", ... }
-   */
   function parseBooleanQuery(input) {
     var tokens = tokenizeBoolean(input);
     var pos = 0;
 
-    function peek() { return pos < tokens.length ? tokens[pos] : null; }
-    function consume() { return tokens[pos++]; }
+    function peek() {
+      return pos < tokens.length ? tokens[pos] : null;
+    }
+    function consume() {
+      return tokens[pos++];
+    }
 
     function parseOr() {
       var left = parseAnd();
       while (peek() && peek().type === "OR") {
-        consume(); // OR
+        consume();
         var right = parseAnd();
         left = { type: "OR", left: left, right: right };
       }
@@ -750,11 +745,10 @@
       while (peek()) {
         var t = peek();
         if (t.type === "AND") {
-          consume(); // AND
+          consume();
           var right = parseNot();
           left = { type: "AND", left: left, right: right };
         } else if (t.type === "TERM" || t.type === "PHRASE" || t.type === "LPAREN" || t.type === "NOT") {
-          // implicit AND
           var right2 = parseNot();
           left = { type: "AND", left: left, right: right2 };
         } else {
@@ -766,7 +760,7 @@
 
     function parseNot() {
       if (peek() && peek().type === "NOT") {
-        consume(); // NOT
+        consume();
         var operand = parseAtom();
         return { type: "NOT", operand: operand };
       }
@@ -778,9 +772,9 @@
       if (!t) return { type: "TERM", value: "" };
 
       if (t.type === "LPAREN") {
-        consume(); // (
+        consume();
         var expr = parseOr();
-        if (peek() && peek().type === "RPAREN") consume(); // )
+        if (peek() && peek().type === "RPAREN") consume();
         return expr;
       }
 
@@ -794,20 +788,14 @@
         return { type: "TERM", value: t.value };
       }
 
-      // unexpected token — consume and treat as empty term
       consume();
       return { type: "TERM", value: "" };
     }
 
     if (!tokens.length) return { type: "TERM", value: "" };
-    var ast = parseOr();
-    return ast;
+    return parseOr();
   }
 
-  /**
-   * Extract all leaf terms from an AST, tagging each with whether
-   * it's under a NOT node (negated context).
-   */
   function extractLeafTerms(ast, negated) {
     negated = !!negated;
     if (!ast) return [];
@@ -824,10 +812,6 @@
     return [];
   }
 
-  /**
-   * Evaluate a boolean AST against a set of matched term keys.
-   * matchedSet is an object where keys are lowercased term values that matched.
-   */
   function evaluateBooleanAst(ast, matchedSet) {
     if (!ast) return false;
     if (ast.type === "TERM") {
@@ -885,8 +869,7 @@
     if (r.width <= 0 || r.height <= 0) return;
     var bias = typeof xBias === "number" ? xBias : 0.35;
     var x = r.left + Math.max(4, Math.min(r.width * bias, r.width - 4));
-    var yJitter = (Math.random() - 0.5) * Math.min(r.height * 0.3, 6);
-    var y = r.top + r.height / 2 + yJitter;
+    var y = r.top + r.height / 2;
     var base = { bubbles: true, cancelable: true, clientX: x, clientY: y, view: win, button: 0 };
     try {
       if (typeof win.PointerEvent === "function") {
@@ -1421,7 +1404,7 @@
     for (var s = 0; s < strategies.length; s++) {
       if (isDropdownMenuOpen(doc)) break;
       singleClick(splBtn, win, strategies[s]);
-      await sleepJitter(550);
+      await sleep(500);
       if (isDropdownMenuOpen(doc)) break;
     }
 
@@ -1429,7 +1412,7 @@
 
     var noteItem = findNoteToSelfItem(doc);
     if (!noteItem) {
-      await sleepJitter(450);
+      await sleep(400);
       noteItem = findNoteToSelfItem(doc);
     }
     if (!noteItem) return false;
@@ -1441,18 +1424,18 @@
 
     var clickEl = inner || noteItem;
     singleClick(clickEl, win, "dispatch");
-    await sleepJitter(350);
+    await sleep(300);
 
     var triggerText = getDeepText(splBtn);
     if (/note\s*to\s*self/i.test(triggerText)) return true;
 
     singleClick(clickEl, win, "native");
-    await sleepJitter(350);
+    await sleep(300);
     triggerText = getDeepText(splBtn);
     if (/note\s*to\s*self/i.test(triggerText)) return true;
 
     singleClick(noteItem, win, "dispatch");
-    await sleepJitter(350);
+    await sleep(300);
     return true;
   }
 
@@ -1463,11 +1446,11 @@
   async function prepareNotesSection(doc, win) {
     var notesTab = findNotesTab(doc, win);
     if (!notesTab) return false;
-    try { notesTab.scrollIntoView({ block: "center", behavior: "smooth" }); } catch (_) {}
-    await sleepJitter(80);
-    dispatchClickAtElementCenter(notesTab, win, 0.3 + Math.random() * 0.4);
+    try { notesTab.scrollIntoView({ block: "center", behavior: "instant" }); } catch (_) {}
+    await sleep(50);
+    dispatchClickAtElementCenter(notesTab, win, 0.5);
     try { notesTab.click(); } catch (_) {}
-    await sleepJitter(850);
+    await sleep(800);
     var ok = await selectNoteToSelf(doc, win);
     return ok;
   }
@@ -1553,14 +1536,12 @@
       return { log: log, moved: false, skipped: true, matchedKeywords: [], hitCount: 0 };
     }
 
-    var isBooleanMode = config.mode === "boolean" && config.booleanQuery;
-
+    var isBooleanMode = config.mode === "boolean" && String(config.booleanQuery || "").trim();
     if (isBooleanMode) {
       return runBooleanTriageWithDoc(doc, win, config, options, log);
     }
 
-    var customExp = config.customKeywordExpansions || "";
-    var keywords = resolveKeywords(config.keywords || "", customExp);
+    var keywords = resolveKeywords(config.keywords || "");
     var minHits = Math.max(1, parseInt(config.minHits, 10) || 2);
     var dryRun = !!config.dryRun;
     var postToNotes = !!config.postToNotes;
@@ -1571,28 +1552,47 @@
     }
 
     log.push({ ok: true, msg: "Keywords (" + keywords.length + "): " + keywords.slice(0, 8).join(", ") + (keywords.length > 8 ? "..." : "") });
-    var nCustom = countCustomExpansionRules(customExp);
-    if (nCustom > 0) {
-      log.push({ ok: true, msg: "Custom abbreviation rules (keyword_expansions style): " + nCustom + " line(s)" });
-    }
     log.push({ ok: true, msg: "Min hits to move forward: " + minHits });
 
-    var resumeWaitMs = Math.max(2000, parseInt(config.resumeWaitMs, 10) || 5000);
+    var resumeWaitMs = Math.max(1500, parseInt(config.resumeWaitMs, 10) || 3000);
+    await sleep(resumeWaitMs);
 
-    // Extract resume text with polling + Resume tab click (before Notes switch)
+    var textParts = [];
+
+    try { await ensureResumeTabActive(doc, win); } catch (_) {}
+    await sleep(800);
+
     var resumeText = "";
-    try { resumeText = await extractResumeWithRetry(doc, win, resumeWaitMs); } catch (e) {
+    try { resumeText = getResumeText(doc); } catch (e) {
       log.push({ ok: false, msg: "Failed to extract resume text: " + (e && e.message) });
     }
-    var screeningText = "";
-    try { screeningText = getScreeningText(doc, win); } catch (_) {}
+    if (resumeText) textParts.push(resumeText);
+
+    try { await ensureProfileTabActive(doc, win); } catch (_) {}
+    await sleep(600);
 
     var profileText = "";
-    try { profileText = getFullProfileText(doc); } catch (_) {}
+    try { profileText = getProfileOverviewText(doc); } catch (_) {}
+    if (profileText) textParts.push(profileText);
 
-    var allText = (resumeText + " " + screeningText + " " + profileText).trim();
+    var screeningText = "";
+    try { screeningText = getScreeningText(doc, win); } catch (_) {}
+    if (screeningText) textParts.push(screeningText);
+
+    var allText = textParts.join("\n\n").trim();
+
+    if (allText.length < 200) {
+      var fullPage = "";
+      try { fullPage = getFullPageText(doc); } catch (_) {}
+      if (fullPage.length > allText.length) allText = fullPage;
+    }
+
+    allText = normalizeForKw(allText);
+    var excludedKw = "";
+    try { excludedKw = getExcludedText(doc); } catch (_) {}
+    if (excludedKw) allText = stripExcludedText(allText, excludedKw);
     var textLen = allText.length;
-    log.push({ ok: true, msg: "Text extracted: " + textLen + " chars (resume: " + resumeText.length + ", screening: " + screeningText.length + ", profile: " + profileText.length + ")" });
+    log.push({ ok: true, msg: "Text extracted: " + textLen + " chars (resume: " + resumeText.length + ", profile: " + (profileText || "").length + ", screening: " + screeningText.length + ")" });
 
     if (postToNotes) {
       try { await prepareNotesSection(doc, win); } catch (_) {}
@@ -1652,22 +1652,30 @@
       return { log: log, moved: false, skipped: false, matchedKeywords: hitLabels, hitCount: result.hitCount, notesPosted: notesPosted };
     }
 
-    try { moveCtrl.btn.scrollIntoView({ block: "center", behavior: "smooth" }); } catch (_) {}
-    await sleepJitter(250);
+    try { moveCtrl.btn.scrollIntoView({ block: "center", behavior: "instant" }); } catch (_) {}
+    await sleep(200);
     try { moveCtrl.btn.focus && moveCtrl.btn.focus(); } catch (_) {}
-    await sleepJitter(80);
+    await sleep(60);
     fireMoveForwardPipelineClick(win, moveCtrl.btn, moveCtrl.host);
     log.push({ ok: true, msg: "Clicked Move forward" });
-    await sleepJitter(moveSettleMs);
+    await sleep(moveSettleMs);
 
     return { log: log, moved: true, skipped: false, matchedKeywords: hitLabels, hitCount: result.hitCount, notesPosted: notesPosted };
   }
 
-  /* ── Boolean mode: scan + notes only, no Move forward ── */
-
   async function runBooleanTriageWithDoc(doc, win, config, options, log) {
     var postToNotes = !!config.postToNotes;
-    var booleanQuery = config.booleanQuery || "";
+    var booleanQueryRaw = String(config.booleanQuery || "").trim();
+    var opens = (booleanQueryRaw.match(/\(/g) || []).length;
+    var closes = (booleanQueryRaw.match(/\)/g) || []).length;
+    var booleanQuery = booleanQueryRaw;
+    if (closes > opens) {
+      for (var mo = 0; mo < closes - opens; mo++) booleanQuery = "(" + booleanQuery;
+      log.push({ ok: true, msg: "Boolean: prepended " + (closes - opens) + " '(' to balance parentheses in pasted query" });
+    } else if (opens > closes) {
+      for (var mc = 0; mc < opens - closes; mc++) booleanQuery = booleanQuery + ")";
+      log.push({ ok: true, msg: "Boolean: appended " + (opens - closes) + " ')' to balance parentheses" });
+    }
 
     var ast;
     try {
@@ -1680,12 +1688,12 @@
     var allLeaves = extractLeafTerms(ast);
     var positiveTerms = [];
     var negativeTerms = [];
-    var seenLower = {};
+    var seenLeaf = {};
     for (var li = 0; li < allLeaves.length; li++) {
       var leaf = allLeaves[li];
       var lKey = leaf.value.toLowerCase();
-      if (seenLower[lKey]) continue;
-      seenLower[lKey] = true;
+      if (seenLeaf[lKey]) continue;
+      seenLeaf[lKey] = true;
       if (leaf.negated) negativeTerms.push(leaf.value);
       else positiveTerms.push(leaf.value);
     }
@@ -1696,72 +1704,127 @@
       log.push({ ok: true, msg: "Scanning: " + positiveTerms.slice(0, 10).join(", ") + (positiveTerms.length > 10 ? "..." : "") });
     }
 
-    var resumeWaitMs = Math.max(2000, parseInt(config.resumeWaitMs, 10) || 5000);
+    var resumeWaitMs = Math.max(1500, parseInt(config.resumeWaitMs, 10) || 3000);
+    await sleep(resumeWaitMs);
 
-    // Extract resume text with polling + Resume tab click (before Notes switch)
+    /* ── Aggressive multi-source text extraction ── */
+    var textParts = [];
+
+    try { await ensureResumeTabActive(doc, win); } catch (_) {}
+    await sleep(800);
+
     var resumeText = "";
-    try { resumeText = await extractResumeWithRetry(doc, win, resumeWaitMs); } catch (e) {
-      log.push({ ok: false, msg: "Failed to extract resume text: " + (e && e.message) });
-    }
-    var screeningText = "";
-    try { screeningText = getScreeningText(doc, win); } catch (_) {}
+    try { resumeText = getResumeText(doc); } catch (_) {}
+    if (resumeText) textParts.push(resumeText);
+
+    try { await ensureProfileTabActive(doc, win); } catch (_) {}
+    await sleep(600);
 
     var profileText = "";
-    try { profileText = getFullProfileText(doc); } catch (_) {}
+    try { profileText = getProfileOverviewText(doc); } catch (_) {}
+    if (profileText) textParts.push(profileText);
 
-    var allText = (resumeText + " " + screeningText + " " + profileText).trim();
+    var screeningText = "";
+    try { screeningText = getScreeningText(doc, win); } catch (_) {}
+    if (screeningText) textParts.push(screeningText);
+
+    var allText = textParts.join("\n\n").trim();
+
+    if (allText.length < 200) {
+      log.push({ ok: true, msg: "Low text from targeted selectors (" + allText.length + " chars) — falling back to full page text" });
+      var fullPage = "";
+      try { fullPage = getFullPageText(doc); } catch (_) {}
+      if (fullPage.length > allText.length) allText = fullPage;
+    }
+
+    allText = normalizeForKw(allText);
+    var excludedBool = "";
+    try { excludedBool = getExcludedText(doc); } catch (_) {}
+    if (excludedBool) allText = stripExcludedText(allText, excludedBool);
     var textLen = allText.length;
-    log.push({ ok: true, msg: "Text extracted: " + textLen + " chars (resume: " + resumeText.length + ", screening: " + screeningText.length + ", profile: " + profileText.length + ")" });
+    log.push({ ok: true, msg: "Text extracted: " + textLen + " chars (resume: " + resumeText.length + ", profile: " + profileText.length + ", screening: " + screeningText.length + ")" });
 
-    // Now prepare notes section (this switches the visible tab)
     if (postToNotes) {
-      try { await prepareNotesSection(doc, win); } catch (_) {}
+      try {
+        await prepareNotesSection(doc, win);
+      } catch (_) {}
     }
 
     if (textLen < 50) {
       log.push({ ok: false, msg: "Very little text found on page — resume may not have loaded." });
+      if (postToNotes) {
+        try {
+          await postKeywordHitsToNotes(doc, win, ["[NO TEXT EXTRACTED]"], 0, totalTerms, log);
+        } catch (_) {}
+      }
       return { log: log, moved: false, skipped: true, matchedKeywords: [], hitCount: 0 };
     }
 
-    // Scan all terms (positive and negative) individually for boolean evaluation
-    var allTermsToScan = positiveTerms.concat(negativeTerms);
-    var scanResult = findKeywordHits(allText, allTermsToScan);
+    var scanLowerToCanons = {};
+    var scanLowerDisplay = {};
+    function registerBooleanScans(leafValue, negated) {
+      var canonKey = leafValue.trim().toLowerCase();
+      var forms = expandOneBooleanTerm(leafValue);
+      for (var fi = 0; fi < forms.length; fi++) {
+        var sc = forms[fi].trim();
+        if (!sc) continue;
+        var sl = sc.toLowerCase();
+        if (!scanLowerDisplay[sl]) scanLowerDisplay[sl] = sc;
+        if (!scanLowerToCanons[sl]) scanLowerToCanons[sl] = [];
+        var row = { canon: canonKey, negated: negated };
+        var dup = false;
+        for (var d = 0; d < scanLowerToCanons[sl].length; d++) {
+          if (scanLowerToCanons[sl][d].canon === canonKey && scanLowerToCanons[sl][d].negated === negated) {
+            dup = true;
+            break;
+          }
+        }
+        if (!dup) scanLowerToCanons[sl].push(row);
+      }
+    }
+    for (var pi0 = 0; pi0 < positiveTerms.length; pi0++) registerBooleanScans(positiveTerms[pi0], false);
+    for (var ni0 = 0; ni0 < negativeTerms.length; ni0++) registerBooleanScans(negativeTerms[ni0], true);
 
-    // Build matched set for boolean evaluation
+    var uniqueScans = [];
+    for (var slk in scanLowerDisplay) {
+      if (Object.prototype.hasOwnProperty.call(scanLowerDisplay, slk)) uniqueScans.push(scanLowerDisplay[slk]);
+    }
+
+    var scanResult = findKeywordHits(allText, uniqueScans, { maxItems: 15000, scanEveryKeyword: true });
+
     var matchedSet = {};
     for (var hi = 0; hi < scanResult.hits.length; hi++) {
-      matchedSet[scanResult.hits[hi].keyword.toLowerCase()] = true;
+      var hk = scanResult.hits[hi].keyword.toLowerCase();
+      var metas = scanLowerToCanons[hk];
+      if (!metas) continue;
+      for (var mi = 0; mi < metas.length; mi++) {
+        matchedSet[metas[mi].canon] = true;
+      }
     }
 
-    // Evaluate the full boolean expression
     var booleanPass = evaluateBooleanAst(ast, matchedSet);
 
-    // Only report positive (non-NOT) hits in the notes
-    var positiveHits = [];
-    var positiveHitLabels = [];
+    /* ── Collect ALL hits for notes — every term found goes in, regardless of NOT ── */
+    var allHitLabels = [];
+    var seenHitLabel = {};
     for (var pi = 0; pi < scanResult.hits.length; pi++) {
       var hit = scanResult.hits[pi];
-      var hitLower = hit.keyword.toLowerCase();
-      var isNegated = false;
-      for (var ni = 0; ni < negativeTerms.length; ni++) {
-        if (negativeTerms[ni].toLowerCase() === hitLower) { isNegated = true; break; }
-      }
-      if (!isNegated) {
-        positiveHits.push(hit);
-        positiveHitLabels.push(hit.count > 1 ? hit.keyword + " (x" + hit.count + ")" : hit.keyword);
-      }
+      var label = hit.count > 1 ? hit.keyword + " (x" + hit.count + ")" : hit.keyword;
+      var lbl = label.toLowerCase();
+      if (seenHitLabel[lbl]) continue;
+      seenHitLabel[lbl] = true;
+      allHitLabels.push(label);
     }
 
-    var passLabel = booleanPass ? "PASS" : "FAIL";
-    log.push({ ok: booleanPass, msg: "Boolean: " + passLabel + " — " + positiveHits.length + "/" + positiveTerms.length + " positive terms matched" });
-    if (positiveHitLabels.length) {
-      log.push({ ok: true, msg: "Hits: " + positiveHitLabels.join(", ") });
+    log.push({ ok: true, msg: "Boolean: " + allHitLabels.length + " terms matched out of " + uniqueScans.length + " scanned" });
+    if (allHitLabels.length) {
+      log.push({ ok: true, msg: "Hits: " + allHitLabels.join(", ") });
     }
 
     var notesPosted = false;
-    if (postToNotes && positiveHits.length > 0) {
+    if (postToNotes && allHitLabels.length > 0) {
       try {
-        notesPosted = await postKeywordHitsToNotes(doc, win, positiveHitLabels, positiveHits.length, positiveTerms.length, log);
+        notesPosted = await postKeywordHitsToNotes(doc, win, allHitLabels, allHitLabels.length, totalTerms, log);
       } catch (e) {
         log.push({ ok: false, msg: "Notes post error: " + ((e && e.message) || String(e)) });
       }
@@ -1771,8 +1834,8 @@
       log: log,
       moved: false,
       skipped: false,
-      matchedKeywords: positiveHitLabels,
-      hitCount: positiveHits.length,
+      matchedKeywords: allHitLabels,
+      hitCount: allHitLabels.length,
       notesPosted: notesPosted,
       booleanPass: booleanPass,
     };
@@ -1816,7 +1879,7 @@
     var win = window;
     var log = [];
     var KEY = "sr_ext_keyword_triage_v1";
-    var resumeWaitMs = Math.max(2000, parseInt(config.resumeWaitMs, 10) || 5000);
+    var resumeWaitMs = Math.max(1500, parseInt(config.resumeWaitMs, 10) || 3000);
     var moveSettleMs = Math.max(400, parseInt(config.moveSettleMs, 10) || 1800);
     var afterMoveNavigateMs = Math.max(500, parseInt(config.afterMoveNavigateMs, 10) || 1600);
     var moveButtonReadyMs = Math.max(800, parseInt(config.moveButtonReadyMs, 10) || 4500);
@@ -1828,7 +1891,6 @@
         mode: config.mode || "keywords",
         booleanQuery: config.booleanQuery || "",
         keywords: config.keywords,
-        customKeywordExpansions: config.customKeywordExpansions || "",
         minHits: config.minHits,
         dryRun: config.mode === "boolean" ? true : config.dryRun,
         postToNotes: !!config.postToNotes,

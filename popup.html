@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
-  <title>SR Tools</title>
+  <title>NIQ TA Helper</title>
   <style>
     *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
 
@@ -83,19 +83,19 @@
       min-height: 120px;
     }
     .panel.visible { display: block; }
-    #panel-offer.panel.visible {
-      border-color: #3d5a8a;
-      border-top-left-radius: 0;
-    }
+    /* Tab order: Cost assist | Keyword | Offer — panel top corners align with active tab */
     #panel-salary.panel.visible {
       border-color: #3d5a8a;
-      border-top-right-radius: 10px;
       border-top-left-radius: 0;
     }
     #panel-keyword.panel.visible {
       border-color: #3d5a8a;
-      border-top-right-radius: 10px;
       border-top-left-radius: 0;
+      border-top-right-radius: 0;
+    }
+    #panel-offer.panel.visible {
+      border-color: #3d5a8a;
+      border-top-right-radius: 0;
     }
 
     #panel-keyword .field-row label { color: #d0d8e8; }
@@ -120,11 +120,10 @@
     #panel-keyword .field-hint { color: #d0d8e8; }
     #panel-keyword .salary-check { color: #d0d8e8; }
 
-    /* Keyword / Boolean mode toggle */
     .kw-mode-toggle {
       display: flex;
       gap: 6px;
-      margin-bottom: 2px;
+      margin-bottom: 8px;
     }
     .kw-mode-btn {
       flex: 1;
@@ -141,9 +140,16 @@
     }
     .kw-mode-btn:hover { color: var(--text); border-color: #333; }
     .kw-mode-btn.active {
-      color: var(--salary-accent);
-      border-color: var(--salary-accent);
+      color: var(--text);
+      border-color: rgba(232, 234, 240, 0.9);
       background: var(--salary-dim);
+      box-shadow: 0 0 0 1px rgba(232, 234, 240, 0.35);
+    }
+
+    #kwKeywordsSection label[for="kwInput"] {
+      display: block;
+      width: 100%;
+      text-align: center;
     }
 
     /* Keyword suggestions dropdown */
@@ -514,13 +520,104 @@
   </div>
 
   <div class="tab-bar">
-    <button type="button" class="tab active" id="tabOffer" data-panel="panel-offer">Mr Offer</button>
-    <button type="button" class="tab salary" id="tabSalary" data-panel="panel-salary">Cost assist</button>
+    <button type="button" class="tab salary active" id="tabSalary" data-panel="panel-salary">Cost assist</button>
     <button type="button" class="tab keyword" id="tabKeyword" data-panel="panel-keyword">Keyword</button>
+    <button type="button" class="tab" id="tabOffer" data-panel="panel-offer">Offer</button>
   </div>
 
-  <!-- ── Mr Offer ── -->
-  <div class="panel visible" id="panel-offer">
+  <!-- ── Cost assist ── -->
+  <div class="panel visible" id="panel-salary">
+    <div class="salary-fields">
+      <div class="field-row">
+        <label for="salaryMax">Max budget (same units as screening answers)</label>
+        <input type="text" id="salaryMax" placeholder="e.g. 3500000, 35,00,000, or 35L" inputmode="decimal" />
+      </div>
+      <div class="field-row">
+        <label for="salaryMin">Min (optional)</label>
+        <input type="text" id="salaryMin" placeholder="0 or 10L" inputmode="decimal" />
+      </div>
+      <div class="field-row">
+        <label for="salaryWait">Wait after Screening (ms)</label>
+        <input type="number" id="salaryWait" placeholder="600" min="200" step="100" />
+      </div>
+      <label class="salary-check">
+        <input type="checkbox" id="salaryDryRun" />
+        Dry run (read screening answer only, never click Move)
+      </label>
+    </div>
+
+    <div class="salary-actions">
+      <button type="button" class="btn-salary primary" id="btnSalaryQueue">Go</button>
+      <button type="button" class="btn-salary danger" id="btnSalaryStop">Stop</button>
+    </div>
+
+    <div class="status" id="salaryStatusBox">
+      <div class="status-header">
+        <div class="status-dot" id="salaryStatusDot"></div>
+        <span class="status-label" id="salaryStatusLabel">Idle</span>
+      </div>
+      <div class="log" id="salaryLog"></div>
+    </div>
+  </div>
+
+  <!-- ── Keyword / Boolean Search ── -->
+  <div class="panel" id="panel-keyword">
+    <div class="salary-fields">
+      <div class="field-row kw-mode-toggle">
+        <button type="button" class="kw-mode-btn active" id="kwModeKeywords">Cntrl + F</button>
+        <button type="button" class="kw-mode-btn" id="kwModeBoolean">Boolean</button>
+      </div>
+
+      <div id="kwKeywordsSection">
+        <div class="field-row" style="position:relative">
+          <label for="kwInput">Keywords (comma-separated)</label>
+          <textarea id="kwInput" rows="3" placeholder="e.g. Python, AWS, Machine Learning, Chennai" autocomplete="off"></textarea>
+          <div id="kwSuggestionsBox"></div>
+        </div>
+        <div class="field-row">
+          <label for="kwMinHits">Min keywords to match</label>
+          <input type="number" id="kwMinHits" placeholder="2" min="1" step="1" />
+        </div>
+        <label class="salary-check">
+          <input type="checkbox" id="kwDryRun" />
+          Dry run (scan keywords only, never click Move)
+        </label>
+      </div>
+
+      <div id="kwBooleanSection" style="display:none">
+        <div class="field-row">
+          <label for="kwBooleanInput">Boolean Search</label>
+          <textarea id="kwBooleanInput" rows="8" placeholder="Paste LinkedIn Recruiter boolean here, e.g.&#10;(Python OR Java) AND &quot;machine learning&quot;&#10;AND NOT intern" autocomplete="off"></textarea>
+          <div class="field-hint">Supports AND, OR, NOT, &quot;quoted phrases&quot;, (parentheses) &mdash; same syntax as LinkedIn Recruiter.</div>
+        </div>
+      </div>
+
+      <label class="salary-check" style="margin-top:8px">
+        <input type="checkbox" id="kwPostToNotes" checked />
+        Post keyword hits to Notes on profile
+      </label>
+      <div class="field-row" style="margin-top:8px">
+        <label for="kwWorkers">Parallel workers</label>
+        <input type="number" id="kwWorkers" placeholder="3" min="1" max="5" step="1" value="3" />
+      </div>
+    </div>
+
+    <div class="salary-actions">
+      <button type="button" class="btn-salary primary" id="btnKwGo">Go</button>
+      <button type="button" class="btn-salary danger" id="btnKwStop">Stop</button>
+    </div>
+
+    <div class="status" id="kwStatusBox">
+      <div class="status-header">
+        <div class="status-dot" id="kwStatusDot"></div>
+        <span class="status-label" id="kwStatusLabel">Idle</span>
+      </div>
+      <div class="log" id="kwLog" style="max-height:130px"></div>
+    </div>
+  </div>
+
+  <!-- ── Offer ── -->
+  <div class="panel" id="panel-offer">
     <div class="drop-zone" id="dropZone">
       <input type="file" id="fileInput" accept=".xlsx,.xls" />
       <span class="drop-icon">📂</span>
@@ -572,103 +669,6 @@
 
     <div class="usage-count" id="usageCount">
       Runs: <span class="usage-num" id="usageNum">0</span>
-    </div>
-  </div>
-
-  <!-- ── Cost assist ── -->
-  <div class="panel" id="panel-salary">
-    <div class="salary-fields">
-      <div class="field-row">
-        <label for="salaryMax">Max budget (same units as screening answers)</label>
-        <input type="text" id="salaryMax" placeholder="e.g. 3500000, 35,00,000, or 35L" inputmode="decimal" />
-      </div>
-      <div class="field-row">
-        <label for="salaryMin">Min (optional)</label>
-        <input type="text" id="salaryMin" placeholder="0 or 10L" inputmode="decimal" />
-      </div>
-      <div class="field-row">
-        <label for="salaryWait">Wait after Screening (ms)</label>
-        <input type="number" id="salaryWait" placeholder="600" min="200" step="100" />
-      </div>
-      <label class="salary-check">
-        <input type="checkbox" id="salaryDryRun" />
-        Dry run (read screening answer only, never click Move)
-      </label>
-    </div>
-
-    <div class="salary-actions">
-      <button type="button" class="btn-salary primary" id="btnSalaryQueue">Go</button>
-      <button type="button" class="btn-salary danger" id="btnSalaryStop">Stop</button>
-    </div>
-
-    <div class="status" id="salaryStatusBox">
-      <div class="status-header">
-        <div class="status-dot" id="salaryStatusDot"></div>
-        <span class="status-label" id="salaryStatusLabel">Idle</span>
-      </div>
-      <div class="log" id="salaryLog"></div>
-    </div>
-  </div>
-
-  <!-- ── Keyword / Boolean Search ── -->
-  <div class="panel" id="panel-keyword">
-    <div class="salary-fields">
-      <div class="field-row kw-mode-toggle">
-        <button type="button" class="kw-mode-btn active" id="kwModeKeywords">Keywords</button>
-        <button type="button" class="kw-mode-btn" id="kwModeBoolean">Boolean</button>
-      </div>
-
-      <!-- Keywords mode -->
-      <div id="kwKeywordsSection">
-        <div class="field-row" style="position:relative">
-          <label for="kwInput">Keywords (comma-separated)</label>
-          <textarea id="kwInput" rows="3" placeholder="e.g. Python, AWS, Machine Learning, Chennai" autocomplete="off"></textarea>
-          <div id="kwSuggestionsBox"></div>
-          <div class="field-hint">Abbreviations like ML, AI, NLP auto-expand to full forms &middot; type to see related suggestions</div>
-        </div>
-        <div class="field-row">
-          <label for="kwMinHits">Min keywords to match</label>
-          <input type="number" id="kwMinHits" placeholder="2" min="1" step="1" />
-          <div class="field-hint">Move forward only if at least this many keywords are found</div>
-        </div>
-        <label class="salary-check">
-          <input type="checkbox" id="kwDryRun" />
-          Dry run (scan keywords only, never click Move)
-        </label>
-      </div>
-
-      <!-- Boolean mode -->
-      <div id="kwBooleanSection" style="display:none">
-        <div class="field-row">
-          <label for="kwBooleanInput">Boolean Search</label>
-          <textarea id="kwBooleanInput" rows="8" placeholder='Paste LinkedIn Recruiter boolean here, e.g.&#10;(Python OR Java) AND &quot;machine learning&quot;&#10;AND NOT intern'></textarea>
-          <div class="field-hint">Supports AND, OR, NOT, &quot;quoted phrases&quot;, (parentheses) &mdash; same syntax as LinkedIn Recruiter</div>
-        </div>
-      </div>
-
-      <!-- Shared options -->
-      <label class="salary-check">
-        <input type="checkbox" id="kwPostToNotes" checked />
-        Post keyword hits to Notes on profile
-      </label>
-      <div class="field-row">
-        <label for="kwWorkers">Parallel workers</label>
-        <input type="number" id="kwWorkers" placeholder="1" min="1" max="5" step="1" value="1" />
-        <div class="field-hint">Open this many profile tabs at once (1–5). Higher = faster but may trigger DataDome.</div>
-      </div>
-    </div>
-
-    <div class="salary-actions">
-      <button type="button" class="btn-salary primary" id="btnKwGo">Go</button>
-      <button type="button" class="btn-salary danger" id="btnKwStop">Stop</button>
-    </div>
-
-    <div class="status" id="kwStatusBox">
-      <div class="status-header">
-        <div class="status-dot" id="kwStatusDot"></div>
-        <span class="status-label" id="kwStatusLabel">Idle</span>
-      </div>
-      <div class="log" id="kwLog" style="max-height:130px"></div>
     </div>
   </div>
 

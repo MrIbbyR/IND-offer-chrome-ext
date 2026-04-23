@@ -13,7 +13,9 @@ let parallelQueue = null; // { urls: [], config: {}, workers: N, returnUrl, resu
 function resetParallelQueue() {
   if (parallelQueue && parallelQueue.active) {
     for (const tabId of parallelQueue.active.keys()) {
-      try { chrome.tabs.remove(tabId).catch(() => {}); } catch (_) {}
+      try {
+        chrome.tabs.remove(tabId).catch(() => {});
+      } catch (_) {}
     }
   }
   parallelQueue = null;
@@ -33,7 +35,6 @@ async function launchNextWorker() {
     parallelQueue.active.set(tab.id, url);
   } catch (e) {
     parallelQueue.results.push({ url: url, error: "tab_create_failed: " + (e && e.message) });
-    // Try next with jittered delay
     setTimeout(launchNextWorker, jitter(800));
   }
 }
@@ -41,22 +42,23 @@ async function launchNextWorker() {
 function finishParallelQueue() {
   if (!parallelQueue) return;
   const results = parallelQueue.results || [];
-  const returnUrl = parallelQueue.returnUrl;
 
-  chrome.storage.local.set({
-    keywordTriageLastRun: {
-      finishedAt: Date.now(),
-      results: results,
-      parallel: true,
-    },
-  }).catch(() => {});
+  chrome.storage.local
+    .set({
+      keywordTriageLastRun: {
+        finishedAt: Date.now(),
+        results: results,
+        parallel: true,
+      },
+      srParallelWorkerActive: false,
+    })
+    .catch(() => {});
 
   parallelQueue = null;
 }
 
 // ── Message handler ──
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
-  // Close extra profile tabs (existing)
   if (message.type === "srCloseExtraProfileTabs") {
     const keepId = sender.tab && sender.tab.id;
     chrome.tabs.query({ url: "*://*.smartrecruiters.com/*" }, (tabs) => {
@@ -75,11 +77,10 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     return true;
   }
 
-  // Start parallel keyword queue
   if (message.type === "srStartParallelKeywordQueue") {
     resetParallelQueue();
     const urls = message.urls || [];
-    const workers = Math.max(1, Math.min(3, message.workers || 2));
+    const workers = Math.max(1, Math.min(5, message.workers || 2));
     const config = message.config || {};
 
     parallelQueue = {
@@ -92,32 +93,35 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       stopped: false,
     };
 
-    // Store config so worker tabs can read it
-    chrome.storage.local.set({
-      srParallelWorkerConfig: config,
-      srParallelWorkerActive: true,
-    }).then(() => {
-      // Stagger tab opens with randomized delays to avoid DataDome triggers
-      let launched = 0;
-      function staggerLaunch() {
-        if (!parallelQueue || parallelQueue.stopped) return;
-        if (launched >= workers || !parallelQueue.urls.length) return;
-        launched++;
-        launchNextWorker();
-        if (launched < workers && parallelQueue.urls.length) {
-          setTimeout(staggerLaunch, jitter(2800));
+    chrome.storage.local
+      .set({
+        srParallelWorkerConfig: config,
+        srParallelWorkerActive: true,
+      })
+      .then(() => {
+        let launched = 0;
+        function staggerLaunch() {
+          if (!parallelQueue || parallelQueue.stopped) return;
+          if (launched >= workers || !parallelQueue.urls.length) return;
+          launched++;
+          launchNextWorker();
+          if (launched < workers && parallelQueue.urls.length) {
+            setTimeout(staggerLaunch, jitter(2800));
+          }
         }
-      }
-      staggerLaunch();
-    }).catch(() => {});
+        staggerLaunch();
+      })
+      .catch(() => {});
 
     sendResponse({ ok: true, queued: urls.length, workers: workers });
     return true;
   }
 
-  // Worker tab finished scanning a profile
   if (message.type === "srWorkerDone") {
-    if (!parallelQueue) { sendResponse({ next: false }); return true; }
+    if (!parallelQueue) {
+      sendResponse({ next: false });
+      return true;
+    }
     const tabId = sender.tab && sender.tab.id;
     const url = (tabId && parallelQueue.active.get(tabId)) || "";
 
@@ -132,18 +136,15 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     if (tabId) parallelQueue.active.delete(tabId);
 
     if (parallelQueue.stopped || !parallelQueue.urls.length) {
-      // Close this worker tab
       if (tabId) chrome.tabs.remove(tabId).catch(() => {});
       if (parallelQueue.active.size === 0) finishParallelQueue();
       sendResponse({ next: false });
       return true;
     }
 
-    // Assign next URL to this same tab (reuse tab to avoid DataDome)
     const nextUrl = parallelQueue.urls.shift();
     parallelQueue.active.set(tabId, nextUrl);
     sendResponse({ next: true, url: nextUrl });
-    // Navigate the tab after a randomized delay
     setTimeout(() => {
       if (tabId) {
         chrome.tabs.update(tabId, { url: nextUrl }).catch(() => {
@@ -158,7 +159,6 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     return true;
   }
 
-  // Stop parallel queue
   if (message.type === "srStopParallelKeywordQueue") {
     if (parallelQueue) {
       parallelQueue.stopped = true;
@@ -172,19 +172,24 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     return true;
   }
 
-  // Check if parallel queue is active (for autorun to detect worker mode)
   if (message.type === "srIsParallelWorker") {
-    sendResponse({ active: !!(parallelQueue && !parallelQueue.stopped) });
+    const tabId = sender.tab && sender.tab.id;
+    const active =
+      !!(
+        parallelQueue &&
+        !parallelQueue.stopped &&
+        tabId != null &&
+        parallelQueue.active.has(tabId)
+      );
+    sendResponse({ active });
     return true;
   }
 });
 
-// Clean up if a worker tab is closed unexpectedly
 chrome.tabs.onRemoved.addListener((tabId) => {
   if (!parallelQueue || !parallelQueue.active.has(tabId)) return;
   const url = parallelQueue.active.get(tabId);
   parallelQueue.active.delete(tabId);
   parallelQueue.results.push({ url: url, error: "tab_closed" });
-  // Launch replacement worker after randomized delay
   setTimeout(() => launchNextWorker(), jitter(1800));
 });
