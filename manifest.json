@@ -9,8 +9,7 @@
   },
   "host_permissions": [
     "https://*.smartrecruiters.com/*",
-    "https://*.greenhouse.io/*",
-    "http://localhost/*"
+    "https://*.greenhouse.io/*"
   ],
   "action": {
     "default_popup": "popup.html",
