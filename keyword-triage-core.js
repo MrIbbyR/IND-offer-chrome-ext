@@ -1,60 +1,12 @@
-// keyword-triage-core.js — SmartRecruiters keyword search on resume + optional Move forward
+// keyword-triage-core.js — SmartRecruiters keyword search on resume + notes tagging
 // Exposes: __srKeywordTriageRun, __srKeywordTriageRunMulti, __srKeywordTriageStartQueue,
 //          __srCollectApplicantClickTargets (shared with salary-triage)
 
 (function () {
   "use strict";
 
-  /* ── Keyword expansion table (ported from req.py KEYWORD_EXPANSIONS) ── */
-  var _RD = ["research and development", "research & development", "r and d", "r&d"];
-  var KEYWORD_EXPANSIONS = {
-    "r&d": _RD, "r and d": _RD, "r & d": _RD,
-    "ml": ["machine learning", "machine-learning"],
-    "nlp": ["natural language processing", "natural-language processing"],
-    "ai": ["artificial intelligence", "artificial-intelligence"],
-    "dl": ["deep learning", "deep-learning"],
-    "cv": ["computer vision"],
-    "phd": ["ph.d", "ph.d.", "doctorate", "doctoral"],
-    "ms": ["m.s", "m.s.", "master's", "masters", "msc", "m.sc"],
-    "bsc": ["b.s", "b.s.", "bachelor's", "bachelors", "b.sc"],
-    "iso 45001": ["iso45001", "iso-45001", "ohsms", "occupational health and safety"],
-    "iso 9001": ["iso9001", "iso-9001", "quality management"],
-    "nebsh": ["nebsh igc", "international general certificate"],
-    "ctf": ["capture the flag", "capture-the-flag"],
-    "aws": ["amazon web services"],
-    "gcp": ["google cloud platform", "google cloud"],
-    "api": ["application programming interface", "apis"],
-    "pytorch": ["py torch", "py-torch", "torch", "pytorch lightning"],
-    "tensorflow": ["tensor flow", "tensor-flow", "tensorflow 2", "tf2", "tf.keras", "tf"],
-    "keras": ["tf.keras", "deep learning"],
-    "llm": ["large language model", "llms"],
-    "llms": ["large language models", "llm"],
-    "rag": ["retrieval augmented generation", "retrieval-augmented generation"],
-    "transformer": ["transformers"],
-    "transformers": ["transformer"],
-    "azure": ["microsoft azure", "ms azure", "azure devops", "azure cloud"],
-    "resilience": ["resiliency", "resilient"],
-    "resiliency": ["resilience", "resilient"],
-    "fmcg": ["fast moving consumer goods", "fast-moving consumer goods"],
-    "cpg": ["consumer packaged goods", "packaged goods"],
-    "ner": ["named entity recognition"],
-    "ocr": ["optical character recognition"],
-    "ir": ["information retrieval"],
-    "idp": ["intelligent document processing"],
-  };
-
-  /** Common misspellings / variants → canonical key (lowercase) used before expansion + matching */
-  var KEYWORD_TYPO_ALIASES = {
-    pytroch: "pytorch",
-    pytoch: "pytorch",
-    tensorlfow: "tensorflow",
-    tensorfow: "tensorflow",
-    tenserflow: "tensorflow",
-    azuer: "azure",
-    resilence: "resilience",
-    reslience: "resilience",
-    resliency: "resiliency",
-  };
+  // KEYWORD_EXPANSIONS, KEYWORD_TYPO_ALIASES, and resolver functions are loaded from
+  // keyword-expansions.js (runs as a content script before this file).
 
   var MOVE_FORWARD_ID = "st-moveForward";
 
@@ -143,89 +95,6 @@
       var p = (doc.location && doc.location.pathname) || "";
       return /\/app\/people\/(?:applications|profile)\/[^/?#]+/i.test(p);
     } catch (_) { return false; }
-  }
-
-  /* ── Keyword parsing & expansion (ported from req.py) ── */
-
-  function parseKeywordsFromString(s) {
-    if (!s || !s.trim()) return [];
-    var lines = s.split(/\n/);
-    var out = [];
-    for (var i = 0; i < lines.length; i++) {
-      var line = lines[i].trim();
-      if (line.charAt(0) === "#") continue;
-      var parts = line.split(/[,;]+/);
-      for (var j = 0; j < parts.length; j++) {
-        var p = parts[j].trim();
-        if (p) out.push(p);
-      }
-    }
-    return out;
-  }
-
-  function canonicalizeKeywords(keywords) {
-    var seenLower = {};
-    var cleaned = [];
-    for (var i = 0; i < keywords.length; i++) {
-      var kw = (keywords[i] || "").trim();
-      if (!kw) continue;
-      var key = kw.toLowerCase();
-      if (seenLower[key]) continue;
-      seenLower[key] = true;
-      cleaned.push(kw);
-    }
-    return cleaned;
-  }
-
-  function buildExpansionTable() {
-    var table = {};
-    for (var k in KEYWORD_EXPANSIONS) {
-      if (Object.prototype.hasOwnProperty.call(KEYWORD_EXPANSIONS, k)) {
-        table[k] = KEYWORD_EXPANSIONS[k].slice();
-      }
-    }
-    return table;
-  }
-
-  function expandKeywords(keywords, expansionTable) {
-    expansionTable = expansionTable || buildExpansionTable();
-    var expanded = keywords.slice();
-    var expandedLower = {};
-    for (var i = 0; i < expanded.length; i++) expandedLower[expanded[i].toLowerCase()] = true;
-    for (var k = 0; k < keywords.length; k++) {
-      var key = (keywords[k] || "").trim().toLowerCase();
-      if (!key) continue;
-      var forms = expansionTable[key];
-      if (!forms) continue;
-      for (var f = 0; f < forms.length; f++) {
-        if (!expandedLower[forms[f].toLowerCase()]) {
-          expanded.push(forms[f]);
-          expandedLower[forms[f].toLowerCase()] = true;
-        }
-      }
-    }
-    return expanded;
-  }
-
-  function applyTypoAliases(keywords) {
-    var out = [];
-    for (var i = 0; i < keywords.length; i++) {
-      var raw = (keywords[i] || "").trim();
-      if (!raw) continue;
-      var low = raw.toLowerCase();
-      var canon = KEYWORD_TYPO_ALIASES[low];
-      out.push(canon ? canon : raw);
-    }
-    return out;
-  }
-
-  function resolveKeywords(rawInput) {
-    var table = buildExpansionTable();
-    var parsed = parseKeywordsFromString(rawInput);
-    var typoFixed = applyTypoAliases(parsed);
-    var canon = canonicalizeKeywords(typoFixed);
-    var expanded = expandKeywords(canon, table);
-    return canonicalizeKeywords(expanded);
   }
 
   /** Synonym forms for one boolean leaf (same table as comma keywords, plus typo table). */
@@ -388,6 +257,55 @@
     return merged || fullRoot;
   }
 
+  /**
+   * Resume-viewer content only — no fullRoot fallback.
+   * Used exclusively for the poll readiness check: returns "" until the PDF/resume
+   * element actually renders text (≥200 chars), so the poll doesn't exit early
+   * on page-header text before the resume has loaded.
+   */
+  function getResumeOnlyText(doc) {
+    var root = doc.querySelector("#st-candidateView") || doc.body;
+    if (!root) return "";
+    var selectors = [
+      "sr-resume-viewer",
+      "sr-candidate-resume",
+      "sr-resume",
+      '[data-testid*="resume"]',
+      '[data-testid*="Resume"]',
+      '[class*="resume"]',
+      '[id*="resume"]',
+    ];
+    var chunks = [];
+    var minChunk = 30;
+
+    function pushText(raw) {
+      var t = (raw || "").replace(/\s+/g, " ").trim();
+      if (t.length >= minChunk) chunks.push(t);
+    }
+
+    function collectFromEl(el) {
+      if (!el) return;
+      try {
+        pushText(el.innerText || el.textContent || "");
+        if (el.shadowRoot) {
+          try {
+            pushText(el.shadowRoot.innerText || el.shadowRoot.textContent || "");
+            var deep = collectDeepText(el.shadowRoot, minChunk);
+            for (var d = 0; d < deep.length; d++) chunks.push(deep[d]);
+          } catch (_) {}
+        }
+      } catch (_) {}
+    }
+
+    for (var i = 0; i < selectors.length; i++) {
+      try {
+        var els = root.querySelectorAll(selectors[i]);
+        for (var j = 0; j < els.length; j++) collectFromEl(els[j]);
+      } catch (_) {}
+    }
+    return chunks.join("\n\n");
+  }
+
   function getProfileOverviewText(doc) {
     var root = doc.querySelector("#st-candidateView") || doc.body;
     if (!root) return "";
@@ -517,9 +435,64 @@
       tab.scrollIntoView({ block: "center", behavior: "instant" });
       await sleep(100);
       tab.click();
-      await sleep(1500);
+      // No fixed sleep here — caller uses makeResumeTextWaiter (started before this click)
+      // to react to DOM content appearing rather than waiting a fixed interval.
     } catch (_) {}
     return true;
+  }
+
+  /**
+   * Returns a Promise that resolves to the full resume text as soon as the resume
+   * viewer has ≥200 chars of content, or to whatever is available when maxMs expires.
+   *
+   * Start this BEFORE calling ensureResumeTabActive so the MutationObserver is
+   * already watching when the tab click triggers SR's SPA to mount the PDF viewer.
+   * This avoids the race window where a very fast render could be missed.
+   *
+   * Uses an 80 ms debounce on observer callbacks so rapid SPA re-renders don't
+   * spam getResumeOnlyText (which does shadow-DOM traversal) on every mutation.
+   * A 500 ms fallback poll catches anything the observer might miss.
+   */
+  function makeResumeTextWaiter(doc, maxMs) {
+    return new Promise(function (resolve) {
+      var done = false;
+
+      function finish() {
+        if (done) return;
+        done = true;
+        obs.disconnect();
+        clearTimeout(timer);
+        clearInterval(fallbackPoll);
+        var text = "";
+        try { text = getResumeText(doc); } catch (_) {}
+        resolve(text);
+      }
+
+      function check() {
+        if (done) return;
+        var preview = "";
+        try { preview = getResumeOnlyText(doc); } catch (_) {}
+        if (preview && preview.length >= 200) finish();
+      }
+
+      // Immediate check — content may already be present (e.g. tab was already active).
+      check();
+      if (done) return;
+
+      var root = doc.querySelector("#st-candidateView") || doc.body || doc.documentElement;
+      var pending = false;
+      var obs = new MutationObserver(function () {
+        if (pending || done) return;
+        pending = true;
+        setTimeout(function () { pending = false; check(); }, 80);
+      });
+      obs.observe(root, { childList: true, subtree: true, characterData: true });
+
+      // Fallback poll — safety net in case observer misses a mutation.
+      var fallbackPoll = setInterval(check, 500);
+
+      var timer = setTimeout(function () { if (!done) finish(); }, maxMs);
+    });
   }
 
   async function ensureProfileTabActive(doc, win) {
@@ -556,14 +529,14 @@
       tab.scrollIntoView({ block: "center", behavior: "instant" });
       await sleep(100);
       tab.click();
-      await sleep(1000);
+      await sleep(500);
     } catch (_) {}
     return true;
   }
 
   /* ── Keyword matching (ported from req.py find_keyword_hits) ── */
 
-  function sepFlexiblePatternSource(kwNorm) {
+  function sepFlexiblePatternSource(kwNorm, withSuffix) {
     var tokens = kwNorm.match(/[A-Za-z]+|\d+/g);
     if (!tokens || !tokens.length) return "";
     var mid = "[\\W_]*";
@@ -573,7 +546,10 @@
       })
       .join(mid);
     if (!body) return "";
-    return "(?<![A-Za-z0-9])" + body + "(?![A-Za-z0-9])";
+    var trailingBoundary = withSuffix
+      ? "(?:e?s|ed|ing)?(?![A-Za-z0-9])"
+      : "(?![A-Za-z0-9])";
+    return "(?<![A-Za-z0-9])" + body + trailingBoundary;
   }
 
   /** ISO list heuristic: "ISO Standard (9001, 45001)" matches keyword "ISO 45001" */
@@ -595,9 +571,108 @@
   }
 
   /**
-   * @param {string|string[]} texts - haystack(s); joined with space then normalized (Python join)
+   * Build unigram / bigram / trigram count maps from normalised haystack text.
+   *
+   * CamelCase tokens are split before indexing so expansion forms like "tensor flow"
+   * and "py torch" match resume text written as "TensorFlow" / "PyTorch":
+   *   "TensorFlow" → ["tensor","flow"]   "PyTorch" → ["py","torch"]
+   *
+   * Tokens are lowercased and split on every non-alphanumeric character, so
+   * "tf.keras" → ["tf","keras"], "ci/cd" → ["ci","cd"], "k8s" → ["k8s"].
+   */
+  function buildTokenIndex(hay) {
+    var split = hay
+      .replace(/([a-z\d])([A-Z])/g,        "$1 $2")   // fooBar  → foo Bar
+      .replace(/([A-Z]{2,})([A-Z][a-z])/g, "$1 $2");  // ABCDef  → ABC Def
+
+    var rawParts = split.toLowerCase().split(/[^a-z0-9]+/);
+    var tokens = [];
+    for (var ti = 0; ti < rawParts.length; ti++) {
+      if (rawParts[ti]) tokens.push(rawParts[ti]);
+    }
+
+    var uni = Object.create(null);  // token            → count
+    var bi  = Object.create(null);  // "t1\x00t2"       → count
+    var tri = Object.create(null);  // "t1\x00t2\x00t3" → count
+
+    for (var i = 0; i < tokens.length; i++) {
+      var a = tokens[i];
+      uni[a] = (uni[a] || 0) + 1;
+      if (i + 1 < tokens.length) {
+        var b = tokens[i + 1];
+        var kb = a + "\x00" + b;
+        bi[kb] = (bi[kb] || 0) + 1;
+        if (i + 2 < tokens.length) {
+          var c = tokens[i + 2];
+          tri[kb + "\x00" + c] = (tri[kb + "\x00" + c] || 0) + 1;
+        }
+      }
+    }
+    return { uni: uni, bi: bi, tri: tri };
+  }
+
+  // Suffix variants mirror the (?:e?s|ed|ing)? suffix in sepFlexiblePatternSource
+  // so "publications" matches keyword "publication", "researching" matches "research", etc.
+  var _KW_SFX = ["", "s", "es", "ed", "ing"];
+
+  /**
+   * Look up a normalised keyword in the token index.
+   * Returns hit count (≥1), 0 (not found), or -1 (needs regex — 4+ token phrase
+   * or multi-token wildcard the index can't resolve directly).
+   */
+  function kwHitsInIndex(kwNorm, idx, isWildcard) {
+    var toks = kwNorm.toLowerCase().split(/[^a-z0-9]+/).filter(Boolean);
+    if (!toks.length) return 0;
+
+    // Wildcard: iterate unigrams for any token that starts with the prefix.
+    if (isWildcard) {
+      if (toks.length !== 1) return -1; // multi-token wildcard → regex
+      var pref = toks[0];
+      var wTotal = 0;
+      for (var wt in idx.uni) {
+        if (wt.length >= pref.length && wt.substring(0, pref.length) === pref) {
+          wTotal += idx.uni[wt];
+        }
+      }
+      return wTotal;
+    }
+
+    if (toks.length === 1) {
+      var stem = toks[0];
+      var uTotal = 0;
+      for (var si = 0; si < _KW_SFX.length; si++) {
+        uTotal += idx.uni[stem + _KW_SFX[si]] || 0;
+      }
+      return uTotal;
+    }
+
+    if (toks.length === 2) {
+      var base2 = toks[0] + "\x00" + toks[1];
+      if (idx.bi[base2]) return idx.bi[base2];
+      for (var si2 = 1; si2 < _KW_SFX.length; si2++) {
+        var k2 = toks[0] + "\x00" + toks[1] + _KW_SFX[si2];
+        if (idx.bi[k2]) return idx.bi[k2];
+      }
+      return 0;
+    }
+
+    if (toks.length === 3) {
+      var base3 = toks[0] + "\x00" + toks[1] + "\x00" + toks[2];
+      if (idx.tri[base3]) return idx.tri[base3];
+      for (var si3 = 1; si3 < _KW_SFX.length; si3++) {
+        var k3 = toks[0] + "\x00" + toks[1] + "\x00" + toks[2] + _KW_SFX[si3];
+        if (idx.tri[k3]) return idx.tri[k3];
+      }
+      return 0;
+    }
+
+    return -1; // 4+ token phrase → regex fallback
+  }
+
+  /**
+   * @param {string|string[]} texts - haystack(s); joined with space then normalised
    * @param {string[]} keywords
-   * @param {{ maxItems?: number }} opts
+   * @param {{ maxItems?: number, scanEveryKeyword?: boolean }} opts
    */
   function findKeywordHits(texts, keywords, opts) {
     opts = opts || {};
@@ -612,6 +687,10 @@
           : "";
     var hay = normalizeForKw(joined);
     if (!hay) return { hits: [], hitCount: 0 };
+
+    // Build token index once — all keyword lookups in this call share it.
+    var idx = buildTokenIndex(hay);
+
     var found = [];
     var seenLower = {};
 
@@ -627,7 +706,7 @@
       var kwNorm = normalizeForKw(kwKey);
       if (!kwNorm) continue;
 
-      // Trailing * = prefix match (LinkedIn-style wildcard)
+      // Trailing * = prefix wildcard (LinkedIn-style)
       var isWildcard = kwNorm.charAt(kwNorm.length - 1) === "*";
       if (isWildcard) {
         kwNorm = kwNorm.slice(0, -1).replace(/\s+$/, "");
@@ -635,38 +714,45 @@
       }
 
       var count = 0;
-      var src = sepFlexiblePatternSource(kwNorm);
-      if (isWildcard && src) {
-        var tail = "(?![A-Za-z0-9])";
-        var tailIdx = src.lastIndexOf(tail);
-        if (tailIdx >= 0) src = src.slice(0, tailIdx) + "[A-Za-z0-9]*";
-      }
-      if (src) {
-        try {
-          var rx = new RegExp(src, "gi");
-          var m = hay.match(rx);
-          count = m ? m.length : 0;
-        } catch (_) {
-          count = 0;
+      var idxResult = kwHitsInIndex(kwNorm, idx, isWildcard);
+
+      if (idxResult > 0) {
+        count = idxResult;
+      } else if (idxResult === -1) {
+        // 4+ token phrase or multi-token wildcard — fall back to separator-flexible regex.
+        var src = sepFlexiblePatternSource(kwNorm, !isWildcard);
+        if (isWildcard && src) {
+          var tail = "(?![A-Za-z0-9])";
+          var tailIdx = src.lastIndexOf(tail);
+          if (tailIdx >= 0) src = src.slice(0, tailIdx) + "[A-Za-z0-9]*";
+        }
+        if (src) {
+          try {
+            var rx = new RegExp(src, "gi");
+            var m = hay.match(rx);
+            count = m ? m.length : 0;
+          } catch (_) {
+            count = 0;
+          }
         }
       }
+
+      // ISO list heuristic: "ISO Standard 9001, 45001" — number not adjacent to ISO token.
       if (count === 0) {
         var toks = kwNorm.match(/[A-Za-z]+|\d+/g);
         if (toks && toks.length && toks[0].toLowerCase() === "iso") {
           var num = "";
           for (var t = 1; t < toks.length; t++) {
-            if (/^\d+$/.test(toks[t])) {
-              num = toks[t];
-              break;
-            }
+            if (/^\d+$/.test(toks[t])) { num = toks[t]; break; }
           }
           if (num && isoListHit(hay, num)) count = 1;
         }
       }
+
       if (count > 0) {
-        var key = kwDisp.toLowerCase();
-        if (!seenLower[key]) {
-          seenLower[key] = true;
+        var keyL = kwDisp.toLowerCase();
+        if (!seenLower[keyL]) {
+          seenLower[keyL] = true;
           found.push({ keyword: kwDisp, count: count });
         }
       }
@@ -1398,6 +1484,17 @@
         }
       } catch (_) {}
     }
+    if (!splBtn) {
+      var notesRootForDd = getNotesSection(doc);
+      var ddSearchRoot = notesRootForDd || doc.body || doc.documentElement;
+      var allDds = queryDeepSelectorAll(ddSearchRoot, win, "spl-dropdown");
+      for (var di = 0; di < allDds.length; di++) {
+        if (isVisible(allDds[di], win)) {
+          splBtn = allDds[di].querySelector("spl-button");
+          if (splBtn) break;
+        }
+      }
+    }
     if (!splBtn) return false;
 
     var strategies = ["native", "shadow", "dispatch"];
@@ -1465,7 +1562,7 @@
         dispatchClickAtElementCenter(notesTab, win, 0.5);
         try { notesTab.click(); } catch (_) {}
       }
-      for (var wait = 0; wait < 2000; wait += 200) {
+      for (var wait = 0; wait < 4000; wait += 200) {
         await sleep(200);
         input = findNotesInput(doc, win);
         if (input) break;
@@ -1542,8 +1639,6 @@
     }
 
     var keywords = resolveKeywords(config.keywords || "");
-    var minHits = Math.max(1, parseInt(config.minHits, 10) || 2);
-    var dryRun = !!config.dryRun;
     var postToNotes = !!config.postToNotes;
 
     if (!keywords.length) {
@@ -1552,24 +1647,25 @@
     }
 
     log.push({ ok: true, msg: "Keywords (" + keywords.length + "): " + keywords.slice(0, 8).join(", ") + (keywords.length > 8 ? "..." : "") });
-    log.push({ ok: true, msg: "Min hits to move forward: " + minHits });
 
     var resumeWaitMs = Math.max(1500, parseInt(config.resumeWaitMs, 10) || 3000);
-    await sleep(resumeWaitMs);
-
     var textParts = [];
 
-    try { await ensureResumeTabActive(doc, win); } catch (_) {}
-    await sleep(800);
-
+    // MutationObserver-based resume wait: start the waiter BEFORE clicking the resume
+    // tab so the observer is already watching when SR's SPA mounts the PDF viewer.
+    // Resolves as soon as ≥200 chars of resume-viewer text appears (or on timeout).
     var resumeText = "";
-    try { resumeText = getResumeText(doc); } catch (e) {
-      log.push({ ok: false, msg: "Failed to extract resume text: " + (e && e.message) });
-    }
+    var resumeWaiter = makeResumeTextWaiter(doc, Math.max(resumeWaitMs, 8000));
+    try { await ensureResumeTabActive(doc, win); } catch (_) {}
+    try { resumeText = await resumeWaiter; } catch (_) {}
+    if (!resumeText) { try { resumeText = getResumeText(doc); } catch (_) {} }
+    log.push({ ok: !!(resumeText && resumeText.length >= 50),
+               msg: "Resume: " + (resumeText ? resumeText.length : 0) + " chars" +
+                    (resumeText && resumeText.length < 200 ? " (sparse — continuing scan)" : "") });
     if (resumeText) textParts.push(resumeText);
 
     try { await ensureProfileTabActive(doc, win); } catch (_) {}
-    await sleep(600);
+    await sleep(300);
 
     var profileText = "";
     try { profileText = getProfileOverviewText(doc); } catch (_) {}
@@ -1592,7 +1688,7 @@
     try { excludedKw = getExcludedText(doc); } catch (_) {}
     if (excludedKw) allText = stripExcludedText(allText, excludedKw);
     var textLen = allText.length;
-    log.push({ ok: true, msg: "Text extracted: " + textLen + " chars (resume: " + resumeText.length + ", profile: " + (profileText || "").length + ", screening: " + screeningText.length + ")" });
+    log.push({ ok: textLen >= 50, msg: "Total text: " + textLen + " chars (profile: " + (profileText || "").length + ", screening: " + screeningText.length + ")" });
 
     if (postToNotes) {
       try { await prepareNotesSection(doc, win); } catch (_) {}
@@ -1619,48 +1715,7 @@
       }
     }
 
-    if (result.hitCount < minHits) {
-      log.push({ ok: false, msg: "Below threshold (" + result.hitCount + " < " + minHits + ") — skip" });
-      return { log: log, moved: false, skipped: false, matchedKeywords: hitLabels, hitCount: result.hitCount, notesPosted: notesPosted };
-    }
-
-    log.push({ ok: true, msg: "Meets threshold — proceeding to Move forward" });
-
-    if (dryRun) {
-      log.push({ ok: true, msg: "Dry run: would click Move forward (skipped)" });
-      return { log: log, moved: false, skipped: false, matchedKeywords: hitLabels, hitCount: result.hitCount, notesPosted: notesPosted };
-    }
-
-    var moveReadyMs = Math.max(800, parseInt(config.moveButtonReadyMs, 10) || 4500);
-    var moveSettleMs = Math.max(400, parseInt(config.moveSettleMs, 10) || 1800);
-    var step = 200;
-
-    var moveCtrl = null;
-    for (var elapsed = 0; elapsed < moveReadyMs; elapsed += step) {
-      moveCtrl = findMoveControl(doc, win);
-      if (moveCtrl && moveCtrl.btn && isVisible(moveCtrl.btn, win) && !isDisabledish(moveCtrl.btn)) break;
-      moveCtrl = null;
-      await sleep(step);
-    }
-
-    if (!moveCtrl || !moveCtrl.btn) {
-      log.push({ ok: false, msg: "Move forward button not found." });
-      return { log: log, moved: false, skipped: false, matchedKeywords: hitLabels, hitCount: result.hitCount, notesPosted: notesPosted };
-    }
-    if (isDisabledish(moveCtrl.btn)) {
-      log.push({ ok: false, msg: "Move forward appears disabled — skipped." });
-      return { log: log, moved: false, skipped: false, matchedKeywords: hitLabels, hitCount: result.hitCount, notesPosted: notesPosted };
-    }
-
-    try { moveCtrl.btn.scrollIntoView({ block: "center", behavior: "instant" }); } catch (_) {}
-    await sleep(200);
-    try { moveCtrl.btn.focus && moveCtrl.btn.focus(); } catch (_) {}
-    await sleep(60);
-    fireMoveForwardPipelineClick(win, moveCtrl.btn, moveCtrl.host);
-    log.push({ ok: true, msg: "Clicked Move forward" });
-    await sleep(moveSettleMs);
-
-    return { log: log, moved: true, skipped: false, matchedKeywords: hitLabels, hitCount: result.hitCount, notesPosted: notesPosted };
+    return { log: log, moved: false, skipped: false, matchedKeywords: hitLabels, hitCount: result.hitCount, notesPosted: notesPosted };
   }
 
   async function runBooleanTriageWithDoc(doc, win, config, options, log) {
@@ -1705,20 +1760,22 @@
     }
 
     var resumeWaitMs = Math.max(1500, parseInt(config.resumeWaitMs, 10) || 3000);
-    await sleep(resumeWaitMs);
 
-    /* ── Aggressive multi-source text extraction ── */
+    /* ── Multi-source text extraction — MutationObserver-based resume wait ── */
     var textParts = [];
 
-    try { await ensureResumeTabActive(doc, win); } catch (_) {}
-    await sleep(800);
-
     var resumeText = "";
-    try { resumeText = getResumeText(doc); } catch (_) {}
+    var resumeWaiterBool = makeResumeTextWaiter(doc, Math.max(resumeWaitMs, 8000));
+    try { await ensureResumeTabActive(doc, win); } catch (_) {}
+    try { resumeText = await resumeWaiterBool; } catch (_) {}
+    if (!resumeText) { try { resumeText = getResumeText(doc); } catch (_) {} }
+    log.push({ ok: !!(resumeText && resumeText.length >= 50),
+               msg: "Resume: " + (resumeText ? resumeText.length : 0) + " chars" +
+                    (resumeText && resumeText.length < 200 ? " (sparse)" : "") });
     if (resumeText) textParts.push(resumeText);
 
     try { await ensureProfileTabActive(doc, win); } catch (_) {}
-    await sleep(600);
+    await sleep(300);
 
     var profileText = "";
     try { profileText = getProfileOverviewText(doc); } catch (_) {}
@@ -1742,7 +1799,7 @@
     try { excludedBool = getExcludedText(doc); } catch (_) {}
     if (excludedBool) allText = stripExcludedText(allText, excludedBool);
     var textLen = allText.length;
-    log.push({ ok: true, msg: "Text extracted: " + textLen + " chars (resume: " + resumeText.length + ", profile: " + profileText.length + ", screening: " + screeningText.length + ")" });
+    log.push({ ok: textLen >= 50, msg: "Total text: " + textLen + " chars (profile: " + profileText.length + ", screening: " + screeningText.length + ")" });
 
     if (postToNotes) {
       try {
@@ -1880,9 +1937,6 @@
     var log = [];
     var KEY = "sr_ext_keyword_triage_v1";
     var resumeWaitMs = Math.max(1500, parseInt(config.resumeWaitMs, 10) || 3000);
-    var moveSettleMs = Math.max(400, parseInt(config.moveSettleMs, 10) || 1800);
-    var afterMoveNavigateMs = Math.max(500, parseInt(config.afterMoveNavigateMs, 10) || 1600);
-    var moveButtonReadyMs = Math.max(800, parseInt(config.moveButtonReadyMs, 10) || 4500);
     var queueReadyMaxMs = Math.max(2000, parseInt(config.queueReadyMaxMs, 10) || 16000);
     var baseState = {
       returnUrl: win.location.href,
@@ -1891,13 +1945,8 @@
         mode: config.mode || "keywords",
         booleanQuery: config.booleanQuery || "",
         keywords: config.keywords,
-        minHits: config.minHits,
-        dryRun: config.mode === "boolean" ? true : config.dryRun,
         postToNotes: !!config.postToNotes,
         resumeWaitMs: resumeWaitMs,
-        moveSettleMs: moveSettleMs,
-        afterMoveNavigateMs: afterMoveNavigateMs,
-        moveButtonReadyMs: moveButtonReadyMs,
         queueReadyMaxMs: queueReadyMaxMs,
       },
       log: [],
@@ -1977,5 +2026,8 @@
   }
   globalThis.__srHarvestProfileUrls = function () {
     return harvestProfileUrls(document, window);
+  };
+  globalThis.__srHasSrProfileChrome = function (doc) {
+    return hasSrProfileChrome(doc || document);
   };
 })();

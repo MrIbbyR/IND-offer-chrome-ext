@@ -168,7 +168,14 @@ function salaryLog(icon, msg) {
   const line = document.createElement("div");
   line.className = "log-line";
   const cls = icon === "✓" ? "tick" : icon === "✗" ? "cross" : "wait";
-  line.innerHTML = `<span class="${cls}">${icon}</span><span class="msg">${msg}</span>`;
+  const iconSpan = document.createElement("span");
+  iconSpan.className = cls;
+  iconSpan.textContent = icon;
+  const msgSpan = document.createElement("span");
+  msgSpan.className = "msg";
+  msgSpan.textContent = msg;
+  line.appendChild(iconSpan);
+  line.appendChild(msgSpan);
   salaryLogEl.appendChild(line);
   salaryLogEl.scrollTop = salaryLogEl.scrollHeight;
 }
@@ -331,7 +338,14 @@ function log(icon, msg, active = false) {
   const line = document.createElement("div");
   line.className = "log-line";
   const cls = icon === "✓" ? "tick" : icon === "✗" ? "cross" : "wait";
-  line.innerHTML = `<span class="${cls}">${icon}</span><span class="msg ${active ? "active" : ""}">${msg}</span>`;
+  const iconSpan = document.createElement("span");
+  iconSpan.className = cls;
+  iconSpan.textContent = icon;
+  const msgSpan = document.createElement("span");
+  msgSpan.className = active ? "msg active" : "msg";
+  msgSpan.textContent = msg;
+  line.appendChild(iconSpan);
+  line.appendChild(msgSpan);
   logEl.appendChild(line);
   logEl.scrollTop = logEl.scrollHeight;
   return line;
@@ -485,7 +499,6 @@ btnSalaryStop.addEventListener("click", async () => {
       func: () => {
         try {
           sessionStorage.removeItem("sr_ext_salary_triage_v1");
-          sessionStorage.removeItem("sr_ext_salary_triage_busy");
         } catch (_) {}
       },
     });
@@ -498,11 +511,8 @@ btnSalaryStop.addEventListener("click", async () => {
 
 // ── Keyword Search: DOM refs ──
 const kwInput         = document.getElementById("kwInput");
-const kwMinHits       = document.getElementById("kwMinHits");
-const kwPostToNotes   = document.getElementById("kwPostToNotes");
-const kwDryRun        = document.getElementById("kwDryRun");
-const kwWorkers       = document.getElementById("kwWorkers");
-const btnKwGo         = document.getElementById("btnKwGo");
+const btnKwGo2x       = document.getElementById("btnKwGo2x");
+const btnKwGo3x       = document.getElementById("btnKwGo3x");
 const btnKwStop       = document.getElementById("btnKwStop");
 const kwStatusBox     = document.getElementById("kwStatusBox");
 const kwStatusDot     = document.getElementById("kwStatusDot");
@@ -532,85 +542,63 @@ if (kwModeBooleanBtn) kwModeBooleanBtn.addEventListener("click", () => setKwMode
 
 const KW_STORAGE_KEYS = [
   "kwTriageKeywords",
-  "kwTriageMinHits",
-  "kwTriagePostToNotes",
-  "kwTriageDryRun",
   "kwTriageMode",
   "kwTriageBooleanQuery",
-  "kwTriageWorkers",
 ];
 
 async function loadKwSettings() {
   const s = await chrome.storage.local.get(KW_STORAGE_KEYS);
   if (s.kwTriageKeywords != null) kwInput.value = String(s.kwTriageKeywords);
-  if (s.kwTriageMinHits != null) kwMinHits.value = String(s.kwTriageMinHits);
-  if (s.kwTriagePostToNotes != null) {
-    kwPostToNotes.checked = !!s.kwTriagePostToNotes;
-  }
-  if (s.kwTriageDryRun === true) kwDryRun.checked = true;
   if (s.kwTriageBooleanQuery != null && kwBooleanInput) {
     kwBooleanInput.value = String(s.kwTriageBooleanQuery);
   }
   if (s.kwTriageMode === "boolean") setKwMode("boolean");
-  if (s.kwTriageWorkers != null && kwWorkers) kwWorkers.value = String(s.kwTriageWorkers);
+  updateKwExpandedPreview();
 }
 
 async function saveKwSettings() {
   await chrome.storage.local.set({
     kwTriageKeywords: kwInput.value.trim(),
-    kwTriageMinHits: kwMinHits.value.trim(),
-    kwTriagePostToNotes: kwPostToNotes.checked,
-    kwTriageDryRun: kwDryRun.checked,
     kwTriageMode: kwCurrentMode,
     kwTriageBooleanQuery: kwBooleanInput ? kwBooleanInput.value : "",
-    kwTriageWorkers: kwWorkers ? Math.max(1, Math.min(5, parseInt(kwWorkers.value, 10) || 3)) : 3,
   });
 }
 
-function readKwWorkers() {
-  if (!kwWorkers) return 3;
-  const n = parseInt(kwWorkers.value, 10);
-  if (!Number.isFinite(n) || n < 1) return 3;
-  return Math.min(5, n);
-}
-
-function readKwConfig() {
-  const workers = readKwWorkers();
+function readKwConfig(workers) {
   if (kwCurrentMode === "boolean") {
     return {
       mode: "boolean",
       booleanQuery: kwBooleanInput ? kwBooleanInput.value.trim() : "",
       keywords: "",
-      minHits: 1,
-      postToNotes: kwPostToNotes.checked,
-      dryRun: true,
-      workers,
+      postToNotes: true,
+      workers: workers || 2,
     };
   }
   return {
     mode: "keywords",
     booleanQuery: "",
     keywords: kwInput.value.trim(),
-    minHits: kwMinHits.value.trim() === "" ? 2 : parseInt(kwMinHits.value, 10),
-    postToNotes: kwPostToNotes.checked,
-    dryRun: kwDryRun.checked,
-    workers,
+    postToNotes: true,
+    workers: workers || 2,
   };
 }
 
-[kwInput, kwMinHits, kwPostToNotes, kwDryRun, kwBooleanInput, kwWorkers].forEach((el) => {
+function setKwGoDisabled(val) {
+  if (btnKwGo2x) btnKwGo2x.disabled = val;
+  if (btnKwGo3x) btnKwGo3x.disabled = val;
+}
+
+[kwInput, kwBooleanInput].forEach((el) => {
   if (!el) return;
   el.addEventListener("change", () => saveKwSettings().catch(() => {}));
 });
 
 // ── Keyword suggestions engine ──
 /** Near-miss spellings → suggestion key (lowercase) for “Did you mean …” */
-const KW_TYPO_HINTS = {
-  pytroch: "pytorch",
-  pytoch: "pytorch",
-  tensorlfow: "tensorflow",
-  tensorfow: "tensorflow",
-  tenserflow: "tensorflow",
+// Use the shared KEYWORD_TYPO_ALIASES table from keyword-expansions.js (loaded before popup.js)
+const KW_TYPO_HINTS = (typeof KEYWORD_TYPO_ALIASES !== "undefined") ? KEYWORD_TYPO_ALIASES : {
+  pytroch: "pytorch", pytoch: "pytorch",
+  tensorlfow: "tensorflow", tensorfow: "tensorflow", tenserflow: "tensorflow",
   azuer: "azure",
 };
 
@@ -823,11 +811,56 @@ kwInput.addEventListener("blur", () => {
   setTimeout(() => kwSuggestionsBox.classList.remove("visible"), 150);
 });
 
+// ── Keyword expansion preview ──
+const kwExpandedPreview = document.getElementById("kwExpandedPreview");
+let kwPreviewTimer = null;
+
+function updateKwExpandedPreview() {
+  if (!kwExpandedPreview) return;
+  const val = (kwInput.value || "").trim();
+  if (!val || typeof resolveKeywords !== "function") {
+    kwExpandedPreview.textContent = "";
+    kwExpandedPreview.classList.remove("visible");
+    return;
+  }
+  try {
+    const userTokens = val.split(/[,;\n]+/).map(s => s.trim().toLowerCase()).filter(Boolean);
+    const resolved = resolveKeywords(val);
+    // Only show terms that were added by expansion (not typed by the user)
+    const added = resolved.filter(r => !userTokens.includes(r.toLowerCase()));
+    if (!added.length) {
+      kwExpandedPreview.textContent = "";
+      kwExpandedPreview.classList.remove("visible");
+      return;
+    }
+    kwExpandedPreview.textContent = "Also searches: " + added.join(", ");
+    kwExpandedPreview.classList.add("visible");
+  } catch (_) {
+    kwExpandedPreview.classList.remove("visible");
+  }
+}
+
+kwInput.addEventListener("input", () => {
+  clearTimeout(kwPreviewTimer);
+  kwPreviewTimer = setTimeout(updateKwExpandedPreview, 350);
+});
+kwInput.addEventListener("blur", () => {
+  clearTimeout(kwPreviewTimer);
+  updateKwExpandedPreview();
+});
+
 function kwLog(icon, msg) {
   const line = document.createElement("div");
   line.className = "log-line";
   const cls = icon === "✓" ? "tick" : icon === "✗" ? "cross" : "wait";
-  line.innerHTML = `<span class="${cls}">${icon}</span><span class="msg">${msg}</span>`;
+  const iconSpan = document.createElement("span");
+  iconSpan.className = cls;
+  iconSpan.textContent = icon;
+  const msgSpan = document.createElement("span");
+  msgSpan.className = "msg";
+  msgSpan.textContent = msg;
+  line.appendChild(iconSpan);
+  line.appendChild(msgSpan);
   kwLogEl.appendChild(line);
   kwLogEl.scrollTop = kwLogEl.scrollHeight;
 }
@@ -846,9 +879,9 @@ async function ensureKeywordCore(tabId) {
   });
 }
 
-btnKwGo.addEventListener("click", async () => {
+async function handleKwGo(workers) {
   await saveKwSettings().catch(() => {});
-  const cfg = readKwConfig();
+  const cfg = readKwConfig(workers);
   if (cfg.mode === "boolean") {
     if (!cfg.booleanQuery) {
       kwStatusBox.classList.add("visible");
@@ -874,89 +907,63 @@ btnKwGo.addEventListener("click", async () => {
     return;
   }
 
-  btnKwGo.disabled = true;
+  setKwGoDisabled(true);
   kwStatusBox.classList.add("visible");
   kwLogEl.innerHTML = "";
   setKwStatus("salary-running", "Starting…");
 
-  const workers = cfg.workers || 1;
-
   try {
-    if (workers > 1) {
-      await ensureKeywordCore(tab.id);
-      const [harvest] = await chrome.scripting.executeScript({
-        target: { tabId: tab.id, allFrames: false },
-        func: () => {
-          if (typeof globalThis.__srAutoscrollApplicantListUntilLoaded === "function") {
-            return globalThis.__srAutoscrollApplicantListUntilLoaded().then(() => {
-              if (typeof globalThis.__srHarvestProfileUrls === "function") {
-                return globalThis.__srHarvestProfileUrls();
-              }
-              return [];
-            });
-          }
-          if (typeof globalThis.__srHarvestProfileUrls === "function") {
-            return globalThis.__srHarvestProfileUrls();
-          }
-          return [];
-        },
-      });
-      const urls = harvest?.result || [];
-      if (!urls.length) {
-        kwLog("✗", "No profile URLs found — scroll to load applicants, then try again.");
-        setKwStatus("error", "No profiles");
-        btnKwGo.disabled = false;
-        return;
-      }
-      kwLog("✓", "Found " + urls.length + " profiles. Starting " + workers + " parallel workers…");
-      const resp = await chrome.runtime.sendMessage({
-        type: "srStartParallelKeywordQueue",
-        urls,
-        config: cfg,
-        workers,
-        returnUrl: tab.url,
-      });
-      if (resp?.ok) {
-        const modeLabel = cfg.mode === "boolean" ? "Boolean search" : "Keyword search";
-        kwLog("✓", "Dispatched " + urls.length + " profiles across " + workers + " workers.");
-        setKwStatus("salary-done", modeLabel + " running (" + workers + " workers)");
-      } else {
-        kwLog("✗", resp?.error || "Failed to start parallel queue.");
-        setKwStatus("error", "Queue failed");
-      }
-    } else {
-      await ensureKeywordCore(tab.id);
-      const [inj] = await chrome.scripting.executeScript({
-        target: { tabId: tab.id, allFrames: false },
-        func: (c) => globalThis.__srKeywordTriageStartQueue(c),
-        args: [cfg],
-      });
-      const out = inj?.result;
-      const lines = out?.log || [];
-      for (const e of lines) kwLog(e.ok ? "✓" : "✗", e.msg);
-      if (out?.ok && out?.queued) {
-        const modeHint =
-          out.mode === "click"
-            ? "Click-through queue: opening each name."
-            : "URL queue: jumping to each profile.";
-        if (cfg.mode === "boolean") {
-          kwLog("✓", "Boolean mode: profiles are scanned only; Move forward is never clicked.");
+    await ensureKeywordCore(tab.id);
+    const [harvest] = await chrome.scripting.executeScript({
+      target: { tabId: tab.id, allFrames: false },
+      func: () => {
+        if (typeof globalThis.__srAutoscrollApplicantListUntilLoaded === "function") {
+          return globalThis.__srAutoscrollApplicantListUntilLoaded().then(() => {
+            if (typeof globalThis.__srHarvestProfileUrls === "function") {
+              return globalThis.__srHarvestProfileUrls();
+            }
+            return [];
+          });
         }
-        kwLog("✓", modeHint);
-        kwLog("✓", "Keep this browser tab focused; results saved when finished.");
-        const modeLabel = cfg.mode === "boolean" ? "Boolean search" : "Keyword search";
-        setKwStatus("salary-done", modeLabel + " running — keep tab focused");
-      } else {
-        setKwStatus("error", "Queue failed");
-      }
+        if (typeof globalThis.__srHarvestProfileUrls === "function") {
+          return globalThis.__srHarvestProfileUrls();
+        }
+        return [];
+      },
+    });
+    const urls = harvest?.result || [];
+    if (!urls.length) {
+      kwLog("✗", "No profile URLs found — scroll to load applicants, then try again.");
+      setKwStatus("error", "No profiles");
+      setKwGoDisabled(false);
+      return;
+    }
+    kwLog("✓", "Found " + urls.length + " profiles. Starting " + workers + "× parallel workers…");
+    const resp = await chrome.runtime.sendMessage({
+      type: "srStartParallelKeywordQueue",
+      urls,
+      config: cfg,
+      workers,
+      returnUrl: tab.url,
+    });
+    if (resp?.ok) {
+      const modeLabel = cfg.mode === "boolean" ? "Boolean search" : "Keyword search";
+      kwLog("✓", "Dispatched " + urls.length + " profiles across " + workers + " workers.");
+      setKwStatus("salary-done", modeLabel + " running (" + workers + "× workers)");
+    } else {
+      kwLog("✗", resp?.error || "Failed to start parallel queue.");
+      setKwStatus("error", "Queue failed");
     }
   } catch (e) {
     kwLog("✗", String(e?.message || e));
     setKwStatus("error", "Failed");
   }
 
-  btnKwGo.disabled = false;
-});
+  setKwGoDisabled(false);
+}
+
+btnKwGo2x.addEventListener("click", () => handleKwGo(2));
+btnKwGo3x.addEventListener("click", () => handleKwGo(3));
 
 btnKwStop.addEventListener("click", async () => {
   kwStatusBox.classList.add("visible");
@@ -986,6 +993,63 @@ btnKwStop.addEventListener("click", async () => {
     kwLog("✗", String(e?.message || e));
   }
 });
+
+// ── View Last Run diagnostics ──
+const btnKwLastRun = document.getElementById("btnKwLastRun");
+if (btnKwLastRun) {
+  btnKwLastRun.addEventListener("click", async () => {
+    kwStatusBox.classList.add("visible");
+    kwLogEl.innerHTML = "";
+    try {
+      const data = await chrome.storage.local.get("keywordTriageLastRun");
+      const run = data.keywordTriageLastRun;
+      if (!run) {
+        kwLog("✗", "No previous run data found — run a keyword search first.");
+        setKwStatus("error", "No data");
+        return;
+      }
+
+      const results = run.results || [];
+      const time = run.finishedAt ? new Date(run.finishedAt).toLocaleTimeString() : "?";
+      const withHits  = results.filter(r => r.hitCount > 0).length;
+      const withNotes = results.filter(r => r.notesPosted).length;
+      const withMove  = results.filter(r => r.moved).length;
+      const skipped   = results.filter(r => r.skipped).length;
+
+      kwLog("✓", `Last run: ${results.length} profiles @ ${time}`);
+      kwLog(withHits > 0 ? "✓" : "✗",
+        `${withHits} matched  ·  ${withNotes} notes posted  ·  ${withMove} moved fwd  ·  ${skipped} skipped`);
+
+      for (const r of results.slice(0, 40)) {
+        const seg = (r.url || "").split("/").slice(-2, -1)[0] || r.url.slice(-20);
+        const kws = (r.matchedKeywords || []).slice(0, 3).join(", ") || "";
+        const boolTag = (r.booleanPass != null) ? (r.booleanPass ? " PASS" : " FAIL") : "";
+        const tags = [
+          r.skipped ? "skip" : "",
+          r.hitCount > 0 ? r.hitCount + " hits" : "0 hits",
+          kws,
+          boolTag,
+          r.notesPosted ? "note✓" : (r.hitCount > 0 ? "note✗" : ""),
+          r.moved ? "fwd✓" : "",
+        ].filter(Boolean).join(" · ");
+        kwLog(r.hitCount > 0 ? "✓" : "✗", `[${seg}] ${tags}`);
+      }
+
+      // Show errors from the full log
+      const fullLog = run.log || [];
+      const errors = fullLog.filter(e => !e.ok && e.msg);
+      if (errors.length) {
+        kwLog("✗", `── ${errors.length} error(s) in full log ──`);
+        for (const e of errors.slice(0, 8)) kwLog("✗", e.msg);
+      }
+
+      setKwStatus("salary-done", `Last run: ${results.length} profiles`);
+    } catch (e) {
+      kwLog("✗", String(e?.message || e));
+      setKwStatus("error", "Failed to load");
+    }
+  });
+}
 
 function contentFill(payload) {
   const TARGET = "INR";
@@ -1182,13 +1246,124 @@ function contentFill(payload) {
       return overlap / Math.min(wa.size, wb.size);
     }
 
-    // ── Currencies: disabled for stability; do numeric only ────────────────
+    // ── Currency dropdown automation ────────────────────────────────────────
+    // Walks shadow DOM with a predicate; used below for finding dropdowns and options.
+    function collectDeep(root, test) {
+      const out = [];
+      const visited = new Set();
+      function walk(node) {
+        if (!node || visited.has(node)) return;
+        visited.add(node);
+        if (node.nodeType === Node.ELEMENT_NODE && test(node)) out.push(node);
+        for (let i = 0; i < (node.childNodes?.length || 0); i++) walk(node.childNodes[i]);
+        if (node.shadowRoot) walk(node.shadowRoot);
+      }
+      walk(root);
+      return out;
+    }
+
     async function changeAllCurrenciesLikePython() {
-      log.push({
-        ok: false,
-        msg: "Currency auto-change skipped (please change USD → INR manually)"
+      const CURRENCY_RE = /^[A-Z]{3}$/;
+      let changed = 0;
+      let attempted = 0;
+
+      // ── Pass 1: standard <select> with a TARGET option anywhere in shadow DOM ──
+      const selects = collectDeep(doc.documentElement, n =>
+        n.tagName === 'SELECT' &&
+        Array.from(n.options || []).some(o =>
+          o.value.trim() === TARGET || o.text.trim() === TARGET
+        )
+      );
+      for (const sel of selects) {
+        const curText = (sel.options[sel.selectedIndex]?.text || sel.value || '').trim();
+        if (curText === TARGET) continue;
+        attempted++;
+        const nativeSetter = Object.getOwnPropertyDescriptor(win.HTMLSelectElement.prototype, 'value')?.set;
+        if (nativeSetter) nativeSetter.call(sel, TARGET);
+        else sel.value = TARGET;
+        sel.dispatchEvent(new win.Event('change', { bubbles: true }));
+        log.push({ ok: true, msg: `Currency <select>: ${curText} → ${TARGET}` });
+        changed++;
+        currencies++;
+      }
+
+      // ── Pass 2: SR web-component currency pickers (spl-dropdown, spl-select, etc.) ──
+      // SR offer form currency pickers expose their current value via the `value` attribute
+      // on the host element (e.g. <spl-dropdown value="USD">). We find any such element
+      // whose value is a 3-letter currency code that is not already TARGET.
+      const componentCandidates = collectDeep(doc.documentElement, n => {
+        if (n.nodeType !== Node.ELEMENT_NODE) return false;
+        const tag = n.tagName.toLowerCase();
+        const role = (n.getAttribute?.('role') || '').toLowerCase();
+        if (!tag.startsWith('spl-') && !tag.startsWith('sr-') && role !== 'combobox') return false;
+        const val = (n.getAttribute?.('value') || '').trim();
+        return CURRENCY_RE.test(val) && val !== TARGET;
       });
-      return;
+
+      for (const comp of componentCandidates) {
+        const prevVal = comp.getAttribute('value') || '';
+        attempted++;
+
+        // Attempt A: programmatic setter — some SPL components expose .value on the prototype.
+        let setOk = false;
+        try {
+          const desc = Object.getOwnPropertyDescriptor(Object.getPrototypeOf(comp), 'value');
+          if (desc?.set) {
+            desc.set.call(comp, TARGET);
+            comp.dispatchEvent(new win.Event('change', { bubbles: true }));
+            comp.dispatchEvent(new win.CustomEvent('spl-change', { bubbles: true, detail: { value: TARGET } }));
+            log.push({ ok: true, msg: `Currency component (setter): ${prevVal} → ${TARGET}` });
+            changed++;
+            currencies++;
+            setOk = true;
+          }
+        } catch (_) {}
+        if (setOk) continue;
+
+        // Attempt B: click the trigger button inside the shadow root to open the dropdown,
+        // then click the TARGET option. SR may render the option panel as a body-level portal,
+        // so we scan the entire document for the option after opening.
+        const triggerBtn = collectDeep(comp, n =>
+          n.nodeType === Node.ELEMENT_NODE &&
+          (n.tagName === 'BUTTON' || (n.getAttribute?.('role') || '') === 'button') &&
+          !n.disabled
+        )[0] || comp;
+
+        try { triggerBtn.click(); } catch (_) {}
+        await sleep(400);
+
+        const inrOpt = collectDeep(doc.documentElement, n => {
+          if (n.nodeType !== Node.ELEMENT_NODE) return false;
+          const tag = n.tagName.toLowerCase();
+          const role = (n.getAttribute?.('role') || '').toLowerCase();
+          const isOpt = tag === 'option' || tag === 'spl-option' ||
+                        role === 'option' || role === 'menuitem';
+          return isOpt && (n.textContent || '').trim() === TARGET;
+        })[0];
+
+        if (inrOpt) {
+          try { inrOpt.click(); } catch (_) {}
+          await sleep(300);
+          log.push({ ok: true, msg: `Currency dropdown (click): ${prevVal} → ${TARGET}` });
+          changed++;
+          currencies++;
+        } else {
+          // Close the accidentally-opened dropdown and warn.
+          try {
+            triggerBtn.dispatchEvent(
+              new win.KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true })
+            );
+          } catch (_) {}
+          await sleep(150);
+          log.push({ ok: false, msg: `Currency dropdown ${prevVal}: opened but "${TARGET}" option not found — set manually` });
+        }
+      }
+
+      if (attempted === 0) {
+        log.push({ ok: true, msg: 'No currency dropdowns need changing' });
+      } else if (changed < attempted) {
+        log.push({ ok: false, msg: `Changed ${changed}/${attempted} currency fields — check remaining manually` });
+      }
     }
 
     // ── Angular-friendly value setter on a real INPUT element ───────────────

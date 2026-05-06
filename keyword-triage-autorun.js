@@ -31,6 +31,9 @@
   }
 
   function hasSrQueueControls() {
+    if (typeof globalThis.__srHasSrProfileChrome === "function") {
+      try { return globalThis.__srHasSrProfileChrome(document); } catch (_) {}
+    }
     try {
       return !!document.getElementById("st-moveForward") || !!document.getElementById("st-screening");
     } catch (_) { return false; }
@@ -70,6 +73,36 @@
     return false;
   }
 
+  function playBeep(type) {
+    try {
+      var AudioCtx = window.AudioContext || window.webkitAudioContext;
+      if (!AudioCtx) return;
+      var ctx = new AudioCtx();
+      var freqs = type === "done" ? [880, 1100] : [440];
+      function doPlay() {
+        freqs.forEach(function (freq, i) {
+          var osc = ctx.createOscillator();
+          var gain = ctx.createGain();
+          osc.connect(gain);
+          gain.connect(ctx.destination);
+          osc.type = "sine";
+          osc.frequency.value = freq;
+          var t = ctx.currentTime + i * 0.22;
+          gain.gain.setValueAtTime(0, t);
+          gain.gain.linearRampToValueAtTime(0.28, t + 0.02);
+          gain.gain.exponentialRampToValueAtTime(0.001, t + 0.45);
+          osc.start(t);
+          osc.stop(t + 0.5);
+        });
+      }
+      if (ctx.state === "suspended") {
+        ctx.resume().then(doPlay).catch(function () {});
+      } else {
+        doPlay();
+      }
+    } catch (_) {}
+  }
+
   function showToast(msg) {
     var d = document.createElement("div");
     d.textContent = msg;
@@ -80,6 +113,16 @@
   }
 
   function finishQueue(state, resultsLen) {
+    try { playBeep("done"); } catch (_) {}
+    try {
+      if (chrome.runtime && chrome.runtime.sendMessage) {
+        var matched = (state.results || []).filter(function (r) { return r.hitCount > 0; }).length;
+        chrome.runtime.sendMessage(
+          { type: "srQueueDone", resultsLen: resultsLen, matchedLen: matched },
+          function () { chrome.runtime.lastError; }
+        );
+      }
+    } catch (_) {}
     sessionStorage.removeItem(KEY);
     try {
       if (chrome.storage && chrome.storage.local) {
@@ -350,7 +393,9 @@
         moved: !!result.moved,
         hitCount: result.hitCount || 0,
         matchedKeywords: result.matchedKeywords || [],
+        notesPosted: !!result.notesPosted,
         booleanPass: result.booleanPass,
+        skipped: !!result.skipped,
         clickIndex: kind === "click" ? state.clickIndex : undefined,
       });
 

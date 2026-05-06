@@ -167,6 +167,23 @@
       margin-top: 2px;
     }
     #kwSuggestionsBox.visible { display: block; }
+
+    #kwExpandedPreview {
+      font-size: 9px;
+      color: #4a6080;
+      margin-top: 4px;
+      line-height: 1.5;
+      word-break: break-word;
+      display: none;
+    }
+    #kwExpandedPreview.visible {
+      display: block;
+      padding: 5px 8px;
+      background: rgba(110,168,255,0.05);
+      border: 1px solid rgba(110,168,255,0.14);
+      border-radius: 4px;
+      color: #5a7a9a;
+    }
     .kw-suggestion {
       padding: 5px 10px;
       font-size: 11px;
@@ -373,6 +390,11 @@
       gap: 8px;
       margin: 12px 14px 0;
     }
+    .kw-go-row {
+      display: flex;
+      gap: 8px;
+    }
+    .kw-go-row .btn-salary { flex: 1; }
     .btn-salary {
       padding: 10px;
       border: none;
@@ -573,15 +595,8 @@
           <label for="kwInput">Keywords (comma-separated)</label>
           <textarea id="kwInput" rows="3" placeholder="e.g. Python, AWS, Machine Learning, Chennai" autocomplete="off"></textarea>
           <div id="kwSuggestionsBox"></div>
+          <div id="kwExpandedPreview"></div>
         </div>
-        <div class="field-row">
-          <label for="kwMinHits">Min keywords to match</label>
-          <input type="number" id="kwMinHits" placeholder="2" min="1" step="1" />
-        </div>
-        <label class="salary-check">
-          <input type="checkbox" id="kwDryRun" />
-          Dry run (scan keywords only, never click Move)
-        </label>
       </div>
 
       <div id="kwBooleanSection" style="display:none">
@@ -592,19 +607,15 @@
         </div>
       </div>
 
-      <label class="salary-check" style="margin-top:8px">
-        <input type="checkbox" id="kwPostToNotes" checked />
-        Post keyword hits to Notes on profile
-      </label>
-      <div class="field-row" style="margin-top:8px">
-        <label for="kwWorkers">Parallel workers</label>
-        <input type="number" id="kwWorkers" placeholder="3" min="1" max="5" step="1" value="3" />
-      </div>
     </div>
 
     <div class="salary-actions">
-      <button type="button" class="btn-salary primary" id="btnKwGo">Go</button>
+      <div class="kw-go-row">
+        <button type="button" class="btn-salary primary" id="btnKwGo2x">Go 2×</button>
+        <button type="button" class="btn-salary primary" id="btnKwGo3x">Go 3×</button>
+      </div>
       <button type="button" class="btn-salary danger" id="btnKwStop">Stop</button>
+      <button type="button" class="btn-salary secondary" id="btnKwLastRun">View Last Run</button>
     </div>
 
     <div class="status" id="kwStatusBox">
@@ -673,6 +684,7 @@
   </div>
 
   <script src="xlsx-mini.js"></script>
+  <script src="keyword-expansions.js"></script>
   <script src="popup.js"></script>
 </body>
 </html>
