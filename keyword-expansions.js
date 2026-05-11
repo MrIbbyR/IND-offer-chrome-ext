@@ -32,11 +32,17 @@ var KEYWORD_EXPANSIONS = {
   "microsoft azure":      ["azure"],
 
   // ── Degrees ──
-  "phd":   ["ph.d", "ph.d.", "doctorate", "doctoral"],
-  "ph.d":  ["phd", "ph.d.", "doctorate", "doctoral"],
-  "ph.d.": ["phd", "ph.d", "doctorate", "doctoral"],
-  "ms":    ["m.s", "m.s.", "master's", "masters", "msc", "m.sc"],
-  "bsc":   ["b.s", "b.s.", "bachelor's", "bachelors", "b.sc"],
+  "phd":                  ["ph.d", "ph.d.", "doctorate", "doctoral", "postdoctoral", "postdoc", "dphil", "doctor of philosophy"],
+  "ph.d":                 ["phd", "ph.d.", "doctorate", "doctoral", "postdoctoral", "postdoc"],
+  "ph.d.":                ["phd", "ph.d", "doctorate", "doctoral"],
+  "doctorate":            ["phd", "ph.d", "doctoral", "postdoctoral", "doctor of philosophy"],
+  "doctoral":             ["phd", "ph.d", "doctorate", "postdoctoral"],
+  "postdoc":              ["postdoctoral", "phd", "doctoral", "doctorate"],
+  "postdoctoral":         ["postdoc", "phd", "doctoral", "doctorate"],
+  "dphil":                ["phd", "doctor of philosophy"],
+  "doctor of philosophy": ["phd", "ph.d", "ph.d.", "doctorate", "doctoral", "dphil"],
+  "ms":                   ["m.s", "m.s.", "master's", "masters", "msc", "m.sc"],
+  "bsc":                  ["b.s", "b.s.", "bachelor's", "bachelors", "b.sc"],
 
   // ── ML frameworks ──
   "pytorch":      ["py torch", "py-torch", "torch", "pytorch lightning"],
@@ -190,4 +196,17 @@ function resolveKeywords(rawInput) {
   var canon = canonicalizeKeywords(typoFixed);
   var expanded = expandKeywords(canon, table);
   return canonicalizeKeywords(expanded);
+}
+
+if (typeof module !== "undefined" && module.exports) {
+  module.exports = {
+    KEYWORD_EXPANSIONS: KEYWORD_EXPANSIONS,
+    KEYWORD_TYPO_ALIASES: KEYWORD_TYPO_ALIASES,
+    resolveKeywords: resolveKeywords,
+    buildExpansionTable: buildExpansionTable,
+    parseKeywordsFromString: parseKeywordsFromString,
+    canonicalizeKeywords: canonicalizeKeywords,
+    expandKeywords: expandKeywords,
+    applyTypoAliases: applyTypoAliases,
+  };
 }

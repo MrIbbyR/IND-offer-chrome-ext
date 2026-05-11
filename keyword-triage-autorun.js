@@ -394,6 +394,7 @@
         hitCount: result.hitCount || 0,
         matchedKeywords: result.matchedKeywords || [],
         notesPosted: !!result.notesPosted,
+        notesFailReason: result.notesFailReason || "",
         booleanPass: result.booleanPass,
         skipped: !!result.skipped,
         clickIndex: kind === "click" ? state.clickIndex : undefined,
@@ -401,6 +402,8 @@
 
       var afterMoveMs = Math.max(500, parseInt(state.config && state.config.afterMoveNavigateMs, 10) || 1600);
       if (result.moved) await sleep(afterMoveMs);
+      // Let SR finish its note-save API call before navigating away
+      if (result.notesPosted) await sleep(jitter(1400));
 
       if (kind === "urls") {
         state.queue.shift();

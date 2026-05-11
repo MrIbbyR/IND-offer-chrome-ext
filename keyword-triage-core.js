@@ -57,7 +57,7 @@
         } catch (_) {}
       }
     }, visited);
-    return out.filter(function (el, i, a) { return a.indexOf(el) === i; });
+    return Array.from(new Set(out));
   }
 
   function collectClickablesDeep(root, win) {
@@ -148,7 +148,7 @@
     '[class*="job-application-sidebar"]',
     '[class*="job-application-details"]',
     "aside sr-job-application-sidebar",
-    "aside",
+    // "aside" removed — too broad; stripped candidate skills sections if SR uses aside for profile layout
   ];
 
   function getExcludedText(doc) {
@@ -188,25 +188,40 @@
     minChunk = minChunk || 30;
     var chunks = [];
     var visited = new Set();
+    var buf = [];
 
-    function push(raw) {
-      var t = (raw || "").replace(/\s+/g, " ").trim();
+    var BLOCK = { div:1,p:1,br:1,li:1,ul:1,ol:1,tr:1,td:1,th:1,table:1,
+      section:1,article:1,h1:1,h2:1,h3:1,h4:1,h5:1,h6:1,
+      header:1,footer:1,nav:1,main:1,aside:1,blockquote:1 };
+
+    function flushBuf() {
+      var t = buf.join(" ").replace(/\s+/g, " ").trim();
       if (t.length >= minChunk) chunks.push(t);
+      buf = [];
     }
 
     function walk(node) {
       if (!node || visited.has(node)) return;
       visited.add(node);
-      if (node.nodeType === 1) {
-        try { push(node.innerText || node.textContent || ""); } catch (_) {}
+      if (node.nodeType === 3) {
+        var v = (node.nodeValue || "").replace(/\s+/g, " ").trim();
+        if (v) buf.push(v);
+      } else if (node.nodeType === 1) {
+        var tag = (node.tagName || "").toLowerCase();
+        if (BLOCK[tag]) flushBuf();
       }
-      if (node.shadowRoot) walk(node.shadowRoot);
+      if (node.shadowRoot) { flushBuf(); walk(node.shadowRoot); flushBuf(); }
       if (node.childNodes) {
         for (var i = 0; i < node.childNodes.length; i++) walk(node.childNodes[i]);
+      }
+      if (node.nodeType === 1) {
+        var tag2 = (node.tagName || "").toLowerCase();
+        if (BLOCK[tag2]) flushBuf();
       }
     }
 
     walk(root);
+    flushBuf();
     return chunks;
   }
 
@@ -251,8 +266,9 @@
       } catch (_) {}
     }
 
-    var fullRoot = (root.innerText || root.textContent || "").replace(/\s+/g, " ").trim();
     var merged = chunks.length ? chunks.join("\n\n") : "";
+    if (merged.length >= 500) return merged;
+    var fullRoot = (root.innerText || root.textContent || "").replace(/\s+/g, " ").trim();
     if (merged && fullRoot) return merged + "\n\n" + fullRoot;
     return merged || fullRoot;
   }
@@ -330,14 +346,9 @@
       try {
         var els = root.querySelectorAll(selectors[i]);
         for (var j = 0; j < els.length; j++) {
-          try {
-            var t = (els[j].innerText || els[j].textContent || "").replace(/\s+/g, " ").trim();
-            if (t.length > 30) chunks.push(t);
-          } catch (_) {}
-          if (els[j].shadowRoot) {
-            var deep = collectDeepText(els[j].shadowRoot, 30);
-            for (var d = 0; d < deep.length; d++) chunks.push(deep[d]);
-          }
+          // Deep walk handles all nested shadow roots (experience bullets, skills, etc.)
+          var deep = collectDeepText(els[j], 30);
+          for (var d = 0; d < deep.length; d++) chunks.push(deep[d]);
         }
       } catch (_) {}
     }
@@ -552,20 +563,27 @@
     return "(?<![A-Za-z0-9])" + body + trailingBoundary;
   }
 
-  /** ISO list heuristic: "ISO Standard (9001, 45001)" matches keyword "ISO 45001" */
+  /** ISO list heuristic: "ISO Standard (9001, 45001)" matches keyword "ISO 45001".
+   *  Uses a proximity window because normalizeForKw strips newlines from hay. */
   function isoListHit(hay, num) {
     if (!num) return false;
-    var numRx;
+    var numStr = String(num);
+    var numRxSrc;
     try {
-      var esc = String(num).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-      numRx = new RegExp("(?<!\\d)" + esc + "(?!\\d)", "i");
+      var esc = numStr.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+      numRxSrc = "(?<!\\d)" + esc + "(?!\\d)";
     } catch (_) {
       return false;
     }
-    var chunks = hay.split(/[\n•]+/);
-    for (var i = 0; i < chunks.length; i++) {
-      var ch = chunks[i];
-      if (/\bISO\b/i.test(ch) && numRx.test(ch)) return true;
+    var isoRx = /\bISO\b/gi;
+    var numRx;
+    try { numRx = new RegExp(numRxSrc, "i"); } catch (_) { return false; }
+    var WINDOW = 200;
+    var m;
+    while ((m = isoRx.exec(hay)) !== null) {
+      var start = Math.max(0, m.index - 20);
+      var end = Math.min(hay.length, m.index + WINDOW);
+      if (numRx.test(hay.slice(start, end))) return true;
     }
     return false;
   }
@@ -718,8 +736,10 @@
 
       if (idxResult > 0) {
         count = idxResult;
-      } else if (idxResult === -1) {
-        // 4+ token phrase or multi-token wildcard — fall back to separator-flexible regex.
+      } else if (idxResult === -1 || idxResult === 0) {
+        // -1: 4+ token phrase or multi-token wildcard.
+        // 0: 1–3 token keyword not found in token index — try separator-flexible
+        //    regex to catch compound forms like "gpt4" matching "GPT-4".
         var src = sepFlexiblePatternSource(kwNorm, !isWildcard);
         if (isWildcard && src) {
           var tail = "(?![A-Za-z0-9])";
@@ -1287,6 +1307,64 @@
   }
 
   /**
+   * Single-pass shadow walk that collects notes textarea, "Note to self" state,
+   * and post button simultaneously — avoids 4 separate DOM traversals.
+   * Returns { input, isNoteToSelf, postBtn }.
+   */
+  function findNotesContext(doc, win) {
+    var notesSection = getNotesSection(doc);
+    // SR's form elements (#spl-form-element_N) live outside #st-notes, so always
+    // search the full body — same fallback the original findNotesInput used.
+    var searchRoot = doc.body || doc.documentElement;
+    var input = null;
+    var postBtn = null;
+    var isNoteToSelf = false;
+    var visited = new Set();
+
+    function walk(node) {
+      if (!node || visited.has(node)) return;
+      visited.add(node);
+      if (node.nodeType === 1) {
+        var tag = (node.tagName || "").toLowerCase();
+        // Collect textarea/contenteditable
+        if (!input) {
+          if (tag === "textarea" && isVisible(node, win)) {
+            input = node;
+          } else if (node.matches) {
+            try {
+              if (node.matches('[contenteditable="true"], div[role="textbox"]') && isVisible(node, win))
+                input = node;
+            } catch (_) {}
+          }
+        }
+        // Detect "Note to self" selected on a spl-button
+        if (tag === "spl-button" && !isNoteToSelf) {
+          var bt = getDeepText(node);
+          if (/note\s*to\s*self/i.test(bt)) isNoteToSelf = true;
+        }
+        // Collect post button
+        if (!postBtn && (tag === "spl-button" || tag === "button" || tag === "input")) {
+          if (isVisible(node, win) && !isDisabledish(node)) {
+            var skip = false;
+            try { if (node.closest && node.closest("spl-dropdown")) skip = true; } catch (_) {}
+            if (!skip) {
+              var dtxt = getDeepText(node);
+              if (/^post$/i.test(dtxt) || (/post|save|submit/i.test(dtxt) && dtxt.length < 20)) postBtn = node;
+            }
+          }
+        }
+      }
+      if (node.shadowRoot) walk(node.shadowRoot);
+      if (node.childNodes) {
+        for (var i = 0; i < node.childNodes.length; i++) walk(node.childNodes[i]);
+      }
+    }
+
+    walk(searchRoot);
+    return { input: input, isNoteToSelf: isNoteToSelf, postBtn: postBtn };
+  }
+
+  /**
    * Walk shadow DOMs to find every spl-button / button visible.
    */
   function findAllDeepButtons(root, win) {
@@ -1308,7 +1386,7 @@
       }
     }
     walk(root);
-    return out.filter(function (el, idx, a) { return a.indexOf(el) === idx; });
+    return Array.from(new Set(out));
   }
 
   function getDeepText(el) {
@@ -1356,8 +1434,8 @@
     return null;
   }
 
-  function formatNoteText(hitLabels, hitCount, totalKeywords) {
-    return hitLabels.join(", ") + " - Matched " + hitCount + "/" + totalKeywords;
+  function formatNoteText(hitLabels, hitCount, totalKeywords, notePrefix) {
+    return (notePrefix || "") + hitLabels.join(", ") + " - Matched " + hitCount + "/" + totalKeywords;
   }
 
   /**
@@ -1547,13 +1625,24 @@
     await sleep(50);
     dispatchClickAtElementCenter(notesTab, win, 0.5);
     try { notesTab.click(); } catch (_) {}
-    await sleep(800);
+    // Poll until notes input is present instead of a fixed sleep
+    for (var npw = 0; npw < 3000; npw += 200) {
+      await sleep(200);
+      if (findNotesInput(doc, win)) break;
+    }
     var ok = await selectNoteToSelf(doc, win);
+    // Give SR time to re-render the notes form after note-type selection.
+    // Without this wait, postKeywordHitsToNotes immediately calls findNotesContext
+    // and finds no textarea because the form is mid-render.
+    await sleep(600);
     return ok;
   }
 
-  async function postKeywordHitsToNotes(doc, win, hitLabels, hitCount, totalKeywords, log) {
-    var input = findNotesInput(doc, win);
+  async function postKeywordHitsToNotes(doc, win, hitLabels, hitCount, totalKeywords, log, notePrefix) {
+    // Single combined walk to collect input + noteToSelf state + postBtn
+    var ctx = findNotesContext(doc, win);
+    var input = ctx.input;
+
     if (!input) {
       var notesTab = findNotesTab(doc, win);
       if (notesTab) {
@@ -1564,7 +1653,8 @@
       }
       for (var wait = 0; wait < 4000; wait += 200) {
         await sleep(200);
-        input = findNotesInput(doc, win);
+        ctx = findNotesContext(doc, win);
+        input = ctx.input;
         if (input) break;
       }
     }
@@ -1573,51 +1663,97 @@
       return false;
     }
 
-    var notesSelfOk = false;
-    for (var idx = 0; idx <= 5; idx++) {
-      try {
-        var dd = doc.querySelector("#spl-form-element_" + idx + " spl-dropdown");
-        if (dd && isVisible(dd, win)) {
-          var ddBtn = dd.querySelector("spl-button");
-          if (ddBtn && /note\s*to\s*self/i.test(getDeepText(ddBtn))) { notesSelfOk = true; break; }
-        }
-      } catch (_) {}
-    }
-    if (!notesSelfOk) {
+    if (!ctx.isNoteToSelf) {
       log.push({ ok: true, msg: "Note to self not set — selecting now..." });
       await selectNoteToSelf(doc, win);
+      ctx = findNotesContext(doc, win);
+      if (ctx.input) input = ctx.input;  // textarea may have been remounted by SR
     }
 
-    var noteText = formatNoteText(hitLabels, hitCount, totalKeywords);
+    var noteText = formatNoteText(hitLabels, hitCount, totalKeywords, notePrefix);
     setNativeInputValue(input, noteText);
-    await sleep(100);
+    await sleep(200);
 
     var itag = (input.tagName || "").toLowerCase();
     if (itag === "textarea" || itag === "input") {
       var curVal = "";
       try { curVal = input.value || ""; } catch (_) {}
       if (curVal.indexOf("Matched") < 0) {
-        try { input.value = ""; } catch (_) {}
-        await typeIntoElement(input, noteText, win);
-        await sleep(100);
+        // Strategy 2: execCommand insertText — browser-native, triggers Angular/React bindings
+        var inserted = false;
+        try {
+          input.focus();
+          doc.execCommand("selectAll");
+          inserted = doc.execCommand("insertText", false, noteText);
+        } catch (_) {}
+        if (!inserted) {
+          // Strategy 3: force value + full event set
+          try {
+            var _proto = HTMLTextAreaElement.prototype;
+            var _setter = Object.getOwnPropertyDescriptor(_proto, "value");
+            if (_setter && _setter.set) { _setter.set.call(input, noteText); }
+            else { input.value = noteText; }
+          } catch (_) { try { input.value = noteText; } catch (_2) {} }
+          var _evts = ["input", "change", "keyup"];
+          for (var _ei = 0; _ei < _evts.length; _ei++) {
+            try { input.dispatchEvent(new Event(_evts[_ei], { bubbles: true, composed: true })); } catch (_) {}
+          }
+        }
+        await sleep(200);
       }
     }
 
-    var postBtn = null;
-    for (var bw = 0; bw < 1500; bw += 200) {
-      postBtn = findNotesPostButton(doc, win);
-      if (postBtn) break;
-      await sleep(200);
+    // Soft check — log warning but always proceed to Post (single click already prevents blank notes)
+    var finalInputVal = "";
+    try {
+      finalInputVal = (itag === "textarea" || itag === "input") ? (input.value || "") : (input.textContent || "");
+    } catch (_) {}
+    if (!finalInputVal || finalInputVal.indexOf("Matched") < 0) {
+      log.push({ ok: true, msg: "Value verification uncertain — proceeding to post anyway." });
+    }
+
+    var postBtn = ctx.postBtn;
+    if (!postBtn) {
+      for (var bw = 0; bw < 2000; bw += 200) {
+        postBtn = findNotesPostButton(doc, win);
+        if (postBtn) break;
+        await sleep(200);
+      }
     }
     if (!postBtn) {
       log.push({ ok: false, msg: "Notes post button not found — text entered but not submitted." });
       return false;
     }
 
+    // Click Post exactly once — never retry. Retrying risks posting blank notes when SR
+    // is slow to clear the textarea after a successful submission.
     singleClick(postBtn, win, "shadow");
+    var confirmed = false;
+    for (var pw = 0; pw < 4500; pw += 300) {
+      await sleep(300);
+      var postCheckVal = "";
+      try {
+        postCheckVal = (itag === "textarea" || itag === "input") ? (input.value || "") : (input.textContent || "");
+      } catch (_) {
+        // Element detached — SR unmounted the form after submission.
+        confirmed = true;
+        break;
+      }
+      if (!postCheckVal || postCheckVal.length < 5) { confirmed = true; break; }
+    }
 
-    log.push({ ok: true, msg: "Posted note to self (" + hitCount + " matches)" });
-    await sleep(300);
+    // If textarea didn't clear within 4.5 s, assume the click landed anyway —
+    // SR sometimes keeps text briefly. Returning false here would cause the
+    // caller to log note✗ and potentially requeue, which is worse than a
+    // missed confirmation.
+    if (!confirmed) {
+      log.push({ ok: true, msg: "Note click sent, confirmation timeout — assuming posted (" + hitCount + " matches)" });
+      await sleep(800);
+      return true;
+    }
+
+    await sleep(800);
+    log.push({ ok: true, msg: "Note posted and confirmed (" + hitCount + " matches)" });
     return true;
   }
 
@@ -1715,7 +1851,14 @@
       }
     }
 
-    return { log: log, moved: false, skipped: false, matchedKeywords: hitLabels, hitCount: result.hitCount, notesPosted: notesPosted };
+    var notesFailReason = "";
+    if (!notesPosted && postToNotes && result.hitCount > 0) {
+      for (var nfi = log.length - 1; nfi >= 0; nfi--) {
+        if (!log[nfi].ok && log[nfi].msg) { notesFailReason = log[nfi].msg; break; }
+      }
+    }
+
+    return { log: log, moved: false, skipped: false, matchedKeywords: hitLabels, hitCount: result.hitCount, notesPosted: notesPosted, notesFailReason: notesFailReason };
   }
 
   async function runBooleanTriageWithDoc(doc, win, config, options, log) {
@@ -1880,10 +2023,18 @@
 
     var notesPosted = false;
     if (postToNotes && allHitLabels.length > 0) {
+      var boolPrefix = booleanPass ? "[PASS] " : "[FAIL] ";
       try {
-        notesPosted = await postKeywordHitsToNotes(doc, win, allHitLabels, allHitLabels.length, totalTerms, log);
+        notesPosted = await postKeywordHitsToNotes(doc, win, allHitLabels, allHitLabels.length, totalTerms, log, boolPrefix);
       } catch (e) {
         log.push({ ok: false, msg: "Notes post error: " + ((e && e.message) || String(e)) });
+      }
+    }
+
+    var notesFailReason = "";
+    if (!notesPosted && postToNotes && allHitLabels.length > 0) {
+      for (var bfi = log.length - 1; bfi >= 0; bfi--) {
+        if (!log[bfi].ok && log[bfi].msg) { notesFailReason = log[bfi].msg; break; }
       }
     }
 
@@ -1894,6 +2045,7 @@
       matchedKeywords: allHitLabels,
       hitCount: allHitLabels.length,
       notesPosted: notesPosted,
+      notesFailReason: notesFailReason,
       booleanPass: booleanPass,
     };
   }
@@ -2009,6 +2161,21 @@
   }
 
   /* ── Exports ── */
+
+  if (typeof module !== "undefined" && module.exports) {
+    module.exports = {
+      normalizeForKw: normalizeForKw,
+      buildTokenIndex: buildTokenIndex,
+      kwHitsInIndex: kwHitsInIndex,
+      sepFlexiblePatternSource: sepFlexiblePatternSource,
+      isoListHit: isoListHit,
+      findKeywordHits: findKeywordHits,
+      parseBooleanQuery: parseBooleanQuery,
+      evaluateBooleanAst: evaluateBooleanAst,
+      extractLeafTerms: extractLeafTerms,
+    };
+    return;
+  }
 
   globalThis.__srKeywordTriageRun = function (config) {
     return runKeywordTriage(config || {});

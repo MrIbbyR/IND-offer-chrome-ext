@@ -152,9 +152,7 @@
       },
       visited
     );
-    return out.filter(function (el, i, a) {
-      return a.indexOf(el) === i;
-    });
+    return Array.from(new Set(out));
   }
 
   function collectClickablesDeep(root, win) {
@@ -542,7 +540,7 @@
     for (let i = 0; i < hints.length; i++) {
       const h = hints[i];
       if (!h) continue;
-      if (qNorm.includes(h) || h.includes(qNorm)) {
+      if (qNorm.includes(h)) {
         best = Math.max(best, 0.85);
         continue;
       }
@@ -629,15 +627,21 @@
 
     let wordMult = 1;
     if (/\bcr(?:ore)?s?\b/.test(lower)) wordMult = 10000000;
-    else if (/\blakhs?\b|\blacs?\b/.test(lower)) wordMult = 100000;
+    else if (/\blakhs?\b|\blacs?\b|\blpa\b/.test(lower)) wordMult = 100000;
     else if (/\bmillion\b|\bmn\b/.test(lower)) wordMult = 1000000;
 
     let kMult = 1;
     if (/\d\s*k\b/i.test(lower) || /\d+k\b/i.test(lower.replace(/,/g, ""))) kMult = 1000;
 
-    let work = s.replace(/(\d+(?:\.\d+)?)\s*[lL]\b/g, function (_, n) {
-      return String(Math.round(parseFloat(n) * 100000));
-    });
+    // Compact "25LPA" (no space) — \blpa\b won't fire because "5" and "l" share a word boundary.
+    // Spaced "30 LPA" is handled by the wordMult check above via \blpa\b.
+    let work = s
+      .replace(/(\d+(?:\.\d+)?)[lL][pP][aA]\b/g, function (_, n) {
+        return String(Math.round(parseFloat(n) * 100000));
+      })
+      .replace(/(\d+(?:\.\d+)?)\s*[lL]\b/g, function (_, n) {
+        return String(Math.round(parseFloat(n) * 100000));
+      });
 
     work = work
       .replace(/\b(eur|euros?|€|usd|\$|gbp|£|inr|₹|myr|rm|bgn|leva|ctc)\b/gi, " ")
@@ -1585,6 +1589,16 @@
     });
     fireClick(win, targets[0]);
     return { ok: true, log, queued: targets.length, mode: "click" };
+  }
+
+  if (typeof module !== "undefined" && module.exports) {
+    module.exports = {
+      parseSalaryNumber: parseSalaryNumber,
+      parseBudgetAmount: parseBudgetAmount,
+      scoreQuestion: scoreQuestion,
+      normText: normText,
+    };
+    return;
   }
 
   globalThis.__srSalaryTriageRun = function (config) {

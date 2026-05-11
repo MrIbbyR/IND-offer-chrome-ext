@@ -169,20 +169,59 @@
     #kwSuggestionsBox.visible { display: block; }
 
     #kwExpandedPreview {
-      font-size: 9px;
-      color: #4a6080;
-      margin-top: 4px;
-      line-height: 1.5;
-      word-break: break-word;
       display: none;
+      margin-top: 5px;
     }
     #kwExpandedPreview.visible {
       display: block;
       padding: 5px 8px;
-      background: rgba(110,168,255,0.05);
-      border: 1px solid rgba(110,168,255,0.14);
-      border-radius: 4px;
-      color: #5a7a9a;
+      background: rgba(110,168,255,0.04);
+      border: 1px solid rgba(110,168,255,0.13);
+      border-radius: 5px;
+    }
+    .ep-row {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      gap: 3px;
+      margin: 2px 0;
+      font-size: 9.5px;
+    }
+    .ep-kw {
+      color: #7aafff;
+      font-family: var(--mono);
+      font-weight: 600;
+      white-space: nowrap;
+    }
+    .ep-arrow {
+      color: #3d5a6a;
+      margin: 0 1px;
+      flex-shrink: 0;
+    }
+    .ep-tag {
+      background: rgba(0,229,160,0.08);
+      border: 1px solid rgba(0,229,160,0.22);
+      border-radius: 3px;
+      color: #7ac8a8;
+      padding: 0 4px;
+      font-family: var(--mono);
+      font-size: 9px;
+      white-space: nowrap;
+    }
+    .ep-sep-badge {
+      background: rgba(255,200,80,0.08);
+      border: 1px solid rgba(255,200,80,0.22);
+      border-radius: 3px;
+      color: #c8a050;
+      padding: 0 4px;
+      font-size: 9px;
+      white-space: nowrap;
+      font-style: italic;
+    }
+    .ep-header {
+      font-size: 9px;
+      color: #3d5a6a;
+      margin-bottom: 2px;
     }
     .kw-suggestion {
       padding: 5px 10px;

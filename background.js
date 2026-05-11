@@ -216,7 +216,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
           }
         });
       }
-    }, jitter(1600));
+    }, message.notesPosted ? jitter(2400) : jitter(1600));
     return true;
   }
 

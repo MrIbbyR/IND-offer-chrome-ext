@@ -818,22 +818,77 @@ let kwPreviewTimer = null;
 function updateKwExpandedPreview() {
   if (!kwExpandedPreview) return;
   const val = (kwInput.value || "").trim();
-  if (!val || typeof resolveKeywords !== "function") {
-    kwExpandedPreview.textContent = "";
+  if (!val) {
+    kwExpandedPreview.innerHTML = "";
     kwExpandedPreview.classList.remove("visible");
     return;
   }
   try {
-    const userTokens = val.split(/[,;\n]+/).map(s => s.trim().toLowerCase()).filter(Boolean);
-    const resolved = resolveKeywords(val);
-    // Only show terms that were added by expansion (not typed by the user)
-    const added = resolved.filter(r => !userTokens.includes(r.toLowerCase()));
-    if (!added.length) {
-      kwExpandedPreview.textContent = "";
+    const expTable = (typeof KEYWORD_EXPANSIONS !== "undefined") ? KEYWORD_EXPANSIONS : {};
+    const typos    = (typeof KEYWORD_TYPO_ALIASES !== "undefined") ? KEYWORD_TYPO_ALIASES : {};
+    const userKws  = val.split(/[,;\n]+/).map(s => s.trim()).filter(Boolean);
+    const userLow  = new Set(userKws.map(s => s.toLowerCase()));
+    const globalSeen = new Set(userKws.map(s => s.toLowerCase()));
+
+    // A compound keyword is one where the pattern engine inserts [\W_]* between chars
+    // (any multi-word, hyphenated, or letter-digit boundary term).
+    function isCompound(kw) {
+      return /[\s\-_.]/.test(kw) || /[a-zA-Z]\d|\d[a-zA-Z]/.test(kw);
+    }
+    // Generate canonical separator examples for display only
+    function sepExamples(kw) {
+      const toks = kw.match(/[A-Za-z]+|\d+/g);
+      if (!toks || toks.length < 2) return [];
+      const joined = toks.join("");
+      const title = toks.map(t => t.charAt(0).toUpperCase() + t.slice(1).toLowerCase()).join("");
+      const hyphen = toks.join("-");
+      const under  = toks.join("_");
+      const space  = toks.join(" ");
+      const out = [];
+      [joined, title, hyphen, under, space].forEach(f => {
+        const fl = f.toLowerCase();
+        if (fl !== kw.toLowerCase() && !out.some(x => x.toLowerCase() === fl)) out.push(f);
+      });
+      return out.slice(0, 3);
+    }
+
+    const rows = [];
+    for (const kw of userKws) {
+      const lower = kw.toLowerCase();
+      const canonical = typos[lower] || lower;
+      const synonyms = (expTable[canonical] || [])
+        .filter(e => !globalSeen.has(e.toLowerCase()))
+        .slice(0, 8);
+      const hasSep = isCompound(kw) || synonyms.some(s => isCompound(s));
+      const sepEx = hasSep ? sepExamples(canonical) : [];
+      synonyms.forEach(s => globalSeen.add(s.toLowerCase()));
+
+      if (synonyms.length || sepEx.length) {
+        rows.push({ kw, synonyms, sepEx, typoFixed: canonical !== lower });
+      }
+    }
+
+    if (!rows.length) {
+      kwExpandedPreview.innerHTML = "";
       kwExpandedPreview.classList.remove("visible");
       return;
     }
-    kwExpandedPreview.textContent = "Also searches: " + added.join(", ");
+
+    const headerHtml = `<div class="ep-header">Auto-captured variants (no need to add manually):</div>`;
+    const rowsHtml = rows.map(r => {
+      const corrected = r.typoFixed && typeof KEYWORD_TYPO_ALIASES !== "undefined"
+        ? KEYWORD_TYPO_ALIASES[r.kw.toLowerCase()] : null;
+      const kwHtml = corrected
+        ? `<span class="ep-kw" title="typo corrected">${r.kw} → ${corrected}</span>`
+        : `<span class="ep-kw">${r.kw}</span>`;
+      const synTags = r.synonyms.map(s => `<span class="ep-tag">${s}</span>`).join("");
+      const sepBadge = r.sepEx.length
+        ? `<span class="ep-sep-badge">+ ${r.sepEx.join(" · ")} (spacing/case variants)</span>`
+        : "";
+      return `<div class="ep-row">${kwHtml}<span class="ep-arrow"> →</span> ${synTags}${sepBadge}</div>`;
+    }).join("");
+
+    kwExpandedPreview.innerHTML = headerHtml + rowsHtml;
     kwExpandedPreview.classList.add("visible");
   } catch (_) {
     kwExpandedPreview.classList.remove("visible");
@@ -1029,7 +1084,7 @@ if (btnKwLastRun) {
           r.hitCount > 0 ? r.hitCount + " hits" : "0 hits",
           kws,
           boolTag,
-          r.notesPosted ? "note✓" : (r.hitCount > 0 ? "note✗" : ""),
+          r.notesPosted ? "note✓" : (r.hitCount > 0 ? "note✗" + (r.notesFailReason ? " [" + r.notesFailReason.replace(/\s*—.*/, "").trim().slice(0, 30) + "]" : "") : ""),
           r.moved ? "fwd✓" : "",
         ].filter(Boolean).join(" · ");
         kwLog(r.hitCount > 0 ? "✓" : "✗", `[${seg}] ${tags}`);
