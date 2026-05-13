@@ -3,6 +3,7 @@ const { describe, it } = require('node:test');
 const assert = require('node:assert/strict');
 const {
   resolveKeywords,
+  resolveKeywordsWithMeta,
   expandKeywords,
   applyTypoAliases,
   parseKeywordsFromString,
@@ -122,5 +123,52 @@ describe('resolveKeywords — full pipeline', () => {
 
   it('empty input returns empty array', () => {
     assert.deepEqual(resolveKeywords(''), []);
+  });
+});
+
+describe('resolveKeywordsWithMeta', () => {
+  it('returns keywords array identical to resolveKeywords', () => {
+    const { keywords } = resolveKeywordsWithMeta('pytorch, tensorflow');
+    const plain = resolveKeywords('pytorch, tensorflow');
+    assert.deepEqual(keywords, plain);
+  });
+
+  it('user-typed keyword maps to itself in canonicalMap', () => {
+    const { canonicalMap } = resolveKeywordsWithMeta('pytorch, tensorflow');
+    assert.strictEqual(canonicalMap['pytorch'], 'pytorch');
+    assert.strictEqual(canonicalMap['tensorflow'], 'tensorflow');
+  });
+
+  it('expansion forms map back to the user-typed canonical', () => {
+    const { canonicalMap } = resolveKeywordsWithMeta('tensorflow');
+    assert.strictEqual(canonicalMap['tensor flow'], 'tensorflow');
+    assert.strictEqual(canonicalMap['tensor-flow'], 'tensorflow');
+  });
+
+  it('when user types both canonical and an alias, each maps to itself', () => {
+    // User explicitly types "tensorflow" AND "tensor flow" — both are canonical
+    const { canonicalMap } = resolveKeywordsWithMeta('tensorflow, tensor flow');
+    assert.strictEqual(canonicalMap['tensorflow'], 'tensorflow');
+    assert.strictEqual(canonicalMap['tensor flow'], 'tensor flow');
+  });
+
+  it('userCount equals the number of keywords before expansion', () => {
+    const { userCount, keywords } = resolveKeywordsWithMeta('pytorch, tensorflow, sklearn');
+    assert.strictEqual(userCount, 3);
+    assert.ok(keywords.length > 3); // expanded list must be larger
+  });
+
+  it('typo is corrected before building canonicalMap', () => {
+    const { canonicalMap } = resolveKeywordsWithMeta('pytroch'); // typo → pytorch
+    assert.strictEqual(canonicalMap['pytorch'], 'pytorch');
+    // expansion of pytorch is also mapped back
+    assert.ok(canonicalMap['py torch'] === 'pytorch' || canonicalMap['torch'] === 'pytorch');
+  });
+
+  it('empty input returns empty keywords and empty map', () => {
+    const { keywords, canonicalMap, userCount } = resolveKeywordsWithMeta('');
+    assert.deepEqual(keywords, []);
+    assert.strictEqual(Object.keys(canonicalMap).length, 0);
+    assert.strictEqual(userCount, 0);
   });
 });

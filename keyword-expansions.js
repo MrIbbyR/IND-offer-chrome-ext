@@ -198,11 +198,62 @@ function resolveKeywords(rawInput) {
   return canonicalizeKeywords(expanded);
 }
 
+/**
+ * Like resolveKeywords but also returns a canonicalMap so callers can fold
+ * expansion aliases back to the keyword the user actually typed.
+ *
+ * Returns:
+ *   keywords    — full expanded + deduped list (same as resolveKeywords)
+ *   canonicalMap — { [lowerForm]: userTypedCanonical }
+ *   userCount   — number of keywords before expansion (the user-typed set)
+ *
+ * Rules:
+ *   • Every user-typed keyword maps to itself.
+ *   • Every auto-expansion maps to the user keyword that generated it,
+ *     UNLESS it was also typed directly by the user (in which case it maps
+ *     to itself and is its own canonical group).
+ */
+function resolveKeywordsWithMeta(rawInput) {
+  var table = buildExpansionTable();
+  var parsed = parseKeywordsFromString(rawInput);
+  var typoFixed = applyTypoAliases(parsed);
+  var userKeywords = canonicalizeKeywords(typoFixed);
+
+  var canonicalMap = Object.create(null);
+  for (var i = 0; i < userKeywords.length; i++) {
+    canonicalMap[userKeywords[i].toLowerCase()] = userKeywords[i];
+  }
+
+  var expanded = userKeywords.slice();
+  var expandedLower = Object.create(null);
+  for (var ei = 0; ei < expanded.length; ei++) expandedLower[expanded[ei].toLowerCase()] = true;
+
+  for (var k = 0; k < userKeywords.length; k++) {
+    var key = userKeywords[k].toLowerCase();
+    var forms = table[key];
+    if (!forms) continue;
+    for (var f = 0; f < forms.length; f++) {
+      var fl = forms[f].toLowerCase();
+      if (expandedLower[fl]) continue;
+      expanded.push(forms[f]);
+      expandedLower[fl] = true;
+      if (!canonicalMap[fl]) canonicalMap[fl] = userKeywords[k];
+    }
+  }
+
+  return {
+    keywords: canonicalizeKeywords(expanded),
+    canonicalMap: canonicalMap,
+    userCount: userKeywords.length,
+  };
+}
+
 if (typeof module !== "undefined" && module.exports) {
   module.exports = {
     KEYWORD_EXPANSIONS: KEYWORD_EXPANSIONS,
     KEYWORD_TYPO_ALIASES: KEYWORD_TYPO_ALIASES,
     resolveKeywords: resolveKeywords,
+    resolveKeywordsWithMeta: resolveKeywordsWithMeta,
     buildExpansionTable: buildExpansionTable,
     parseKeywordsFromString: parseKeywordsFromString,
     canonicalizeKeywords: canonicalizeKeywords,

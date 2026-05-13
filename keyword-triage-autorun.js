@@ -378,6 +378,7 @@
           state.queue.shift();
           if (state.queue.length === 0) { finishQueue(state, state.results.length); return; }
           try { sessionStorage.setItem(KEY, JSON.stringify(state)); } catch (_) { sessionStorage.removeItem(KEY); return; }
+          await sleepJitter(2200);
           window.location.replace(state.queue[0]);
           return;
         }
@@ -385,6 +386,7 @@
         if (nextClick >= state.total) { finishQueue(state, state.results.length); return; }
         state.clickIndex = nextClick;
         try { sessionStorage.setItem(KEY, JSON.stringify(state)); } catch (_) { sessionStorage.removeItem(KEY); return; }
+        await sleepJitter(2200);
         window.location.replace(state.returnUrl);
         return;
       }
@@ -429,6 +431,7 @@
           showToast("Keyword search: queue lost (storage full).");
           return;
         }
+        await sleepJitter(2200);
         window.location.replace(state.queue[0]);
         return;
       }
@@ -441,6 +444,7 @@
         showToast("Keyword search: queue lost (storage full).");
         return;
       }
+      await sleepJitter(2200);
       window.location.replace(state.returnUrl);
     } finally {
       try { delete g.__srKeywordAutorunLock; } catch (_) { g.__srKeywordAutorunLock = false; }

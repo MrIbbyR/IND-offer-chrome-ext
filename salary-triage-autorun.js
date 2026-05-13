@@ -18,6 +18,16 @@
     });
   }
 
+  function jitter(baseMs) {
+    var lo = Math.round(baseMs * 0.65);
+    var hi = Math.round(baseMs * 1.35);
+    return lo + Math.floor(Math.random() * (hi - lo + 1));
+  }
+
+  function sleepJitter(baseMs) {
+    return sleep(jitter(baseMs));
+  }
+
   function normUrl(u) {
     try {
       const x = new URL(u, location.href);
@@ -33,6 +43,9 @@
 
   /** SR pipeline / screening hosts (light DOM ids — same as salary-triage-core). */
   function hasSrQueueControls() {
+    if (typeof globalThis.__srHasSrProfileChrome === "function") {
+      try { return globalThis.__srHasSrProfileChrome(document); } catch (_) {}
+    }
     try {
       return !!document.getElementById("st-moveForward") || !!document.getElementById("st-screening");
     } catch (_) {
@@ -283,6 +296,7 @@
             sessionStorage.removeItem(KEY);
             return;
           }
+          await sleepJitter(2200);
           window.location.replace(state.queue[0]);
           return;
         }
@@ -298,6 +312,7 @@
           sessionStorage.removeItem(KEY);
           return;
         }
+        await sleepJitter(2200);
         window.location.replace(state.returnUrl);
         return;
       }
@@ -348,6 +363,7 @@
           showToast("Cost assist: queue lost (storage full).");
           return;
         }
+        await sleepJitter(2200);
         window.location.replace(state.queue[0]);
         return;
       }
@@ -365,6 +381,7 @@
         showToast("Cost assist: queue lost (storage full).");
         return;
       }
+      await sleepJitter(2200);
       window.location.replace(state.returnUrl);
     } finally {
       try {

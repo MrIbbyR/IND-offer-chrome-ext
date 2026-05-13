@@ -268,6 +268,27 @@
 
     var merged = chunks.length ? chunks.join("\n\n") : "";
     if (merged.length >= 500) return merged;
+
+    // Try same-origin iframes — SR often embeds the resume PDF in an <iframe>.
+    // collectDeepText stops at iframe boundaries, so we must read contentDocument directly.
+    // Cross-origin frames throw on access and are silently skipped.
+    try {
+      var iframes = Array.from(doc.querySelectorAll("iframe"));
+      for (var fi = 0; fi < iframes.length; fi++) {
+        try {
+          var fd = iframes[fi].contentDocument ||
+                   (iframes[fi].contentWindow && iframes[fi].contentWindow.document);
+          if (!fd) continue;
+          var ft = ((fd.body && fd.body.innerText) || (fd.body && fd.body.textContent) || "").trim();
+          if (ft.length > 100) chunks.push(ft);
+          var fdeep = collectDeepText(fd.body || fd.documentElement, 20);
+          for (var fd2 = 0; fd2 < fdeep.length; fd2++) chunks.push(fdeep[fd2]);
+        } catch (_) {}
+      }
+    } catch (_) {}
+    merged = chunks.length ? chunks.join("\n\n") : "";
+    if (merged.length >= 500) return merged;
+
     var fullRoot = (root.innerText || root.textContent || "").replace(/\s+/g, " ").trim();
     if (merged && fullRoot) return merged + "\n\n" + fullRoot;
     return merged || fullRoot;
@@ -319,6 +340,115 @@
         for (var j = 0; j < els.length; j++) collectFromEl(els[j]);
       } catch (_) {}
     }
+
+    // Also scan same-origin iframes so the readiness poll triggers correctly
+    // when SR embeds the resume PDF viewer inside an <iframe>.
+    try {
+      var iframes = Array.from(doc.querySelectorAll("iframe"));
+      for (var fi = 0; fi < iframes.length; fi++) {
+        try {
+          var fd = iframes[fi].contentDocument ||
+                   (iframes[fi].contentWindow && iframes[fi].contentWindow.document);
+          if (!fd) continue;
+          var ft = ((fd.body && fd.body.innerText) || (fd.body && fd.body.textContent) || "").trim();
+          if (ft.length > 30) chunks.push(ft);
+        } catch (_) {}
+      }
+    } catch (_) {}
+
+    return chunks.join("\n\n");
+  }
+
+  /**
+   * Extract the candidate header — name, title, and top-bar info that is ALWAYS
+   * visible regardless of which tab is active.  This is the fastest, most reliable
+   * text source on the page and catches titles like "IAM SailPoint Developer".
+   */
+  function getCandidateHeaderText(doc) {
+    var root = doc.querySelector("#st-candidateView") || doc.body;
+    if (!root) return "";
+    var selectors = [
+      "sr-candidate-header",
+      '[data-testid="candidate-header"]',
+      '[data-testid*="candidateHeader"]',
+      '[class*="candidate-header"]',
+      '[class*="candidateHeader"]',
+      '[class*="candidate-name"]',
+      '[class*="candidateName"]',
+      '[data-testid*="candidate-name"]',
+      "sr-candidate-summary",
+      '[class*="candidate-summary"]',
+      '[class*="candidateSummary"]',
+    ];
+    var chunks = [];
+    for (var i = 0; i < selectors.length; i++) {
+      try {
+        var els = root.querySelectorAll(selectors[i]);
+        for (var j = 0; j < els.length; j++) {
+          var deep = collectDeepText(els[j], 10);
+          for (var d = 0; d < deep.length; d++) chunks.push(deep[d]);
+        }
+      } catch (_) {}
+    }
+    if (!chunks.length) {
+      try {
+        var headings = root.querySelectorAll("h1, h2, h3");
+        for (var hi = 0; hi < headings.length; hi++) {
+          var ht = (headings[hi].innerText || headings[hi].textContent || "").replace(/\s+/g, " ").trim();
+          if (ht.length >= 5 && ht.length < 200) chunks.push(ht);
+        }
+      } catch (_) {}
+    }
+    return chunks.join("\n\n");
+  }
+
+  /**
+   * Extract text from pdf.js text layers — SR sometimes renders resumes via
+   * pdf.js which overlays <span> elements on a <canvas>.  The canvas itself
+   * is pixels (invisible to innerText) but the text layer spans are real DOM.
+   */
+  function getPdfTextLayerText(doc) {
+    var chunks = [];
+    var selectors = [
+      ".textLayer span",
+      '[class*="textLayer"] span',
+      '[class*="text-layer"] span',
+      ".pdfViewer .page .textLayer span",
+    ];
+    for (var si = 0; si < selectors.length; si++) {
+      try {
+        var spans = doc.querySelectorAll(selectors[si]);
+        if (spans.length > 20) {
+          var parts = [];
+          for (var i = 0; i < spans.length; i++) {
+            var t = (spans[i].textContent || "").trim();
+            if (t) parts.push(t);
+          }
+          if (parts.length) chunks.push(parts.join(" "));
+        }
+      } catch (_) {}
+    }
+    try {
+      var iframes = Array.from(doc.querySelectorAll("iframe"));
+      for (var fi = 0; fi < iframes.length; fi++) {
+        try {
+          var fd = iframes[fi].contentDocument ||
+                   (iframes[fi].contentWindow && iframes[fi].contentWindow.document);
+          if (!fd) continue;
+          for (var si2 = 0; si2 < selectors.length; si2++) {
+            var spans2 = fd.querySelectorAll(selectors[si2]);
+            if (spans2.length > 20) {
+              var parts2 = [];
+              for (var j = 0; j < spans2.length; j++) {
+                var t2 = (spans2[j].textContent || "").trim();
+                if (t2) parts2.push(t2);
+              }
+              if (parts2.length) chunks.push(parts2.join(" "));
+            }
+          }
+        } catch (_) {}
+      }
+    } catch (_) {}
     return chunks.join("\n\n");
   }
 
@@ -346,7 +476,6 @@
       try {
         var els = root.querySelectorAll(selectors[i]);
         for (var j = 0; j < els.length; j++) {
-          // Deep walk handles all nested shadow roots (experience bullets, skills, etc.)
           var deep = collectDeepText(els[j], 30);
           for (var d = 0; d < deep.length; d++) chunks.push(deep[d]);
         }
@@ -412,7 +541,7 @@
           var els = r.querySelectorAll(tabSelectors[s]);
           for (var i = 0; i < els.length; i++) {
             var txt = (els[i].textContent || els[i].innerText || "").trim().toLowerCase();
-            if (txt === "resume" || txt === "résumé" || txt === "cv") return els[i];
+            if (txt.includes("resume") || txt.includes("résumé") || txt === "cv") return els[i];
           }
         } catch (_) {}
       }
@@ -423,7 +552,7 @@
         visited.add(node);
         if (node.nodeType === 1) {
           var t = (node.textContent || "").trim().toLowerCase();
-          if ((t === "resume" || t === "résumé" || t === "cv") &&
+          if ((t.includes("resume") || t.includes("résumé") || t === "cv") &&
               (node.tagName === "BUTTON" || node.tagName === "A" ||
                (node.getAttribute && node.getAttribute("role") === "tab"))) {
             found = node;
@@ -518,7 +647,7 @@
         visited.add(node);
         if (node.nodeType === 1) {
           var t = (node.textContent || "").trim().toLowerCase();
-          if (t === "profile" &&
+          if ((t === "profile" || t.startsWith("profile")) &&
               (node.tagName === "BUTTON" || node.tagName === "A" ||
                (node.getAttribute && node.getAttribute("role") === "tab"))) {
             found = node;
@@ -778,6 +907,34 @@
       }
     }
     return { hits: found, hitCount: found.length };
+  }
+
+  /**
+   * Collapse expansion aliases back to the canonical (user-typed) keyword.
+   *
+   * When resolveKeywordsWithMeta expands "pytorch" into "py torch", "torch", etc.,
+   * all those aliases may match the same occurrences in the text. This function
+   * folds them into one entry under the canonical name, taking the MAX count
+   * across the group so the count reflects the strongest signal.
+   *
+   * If a form has no entry in canonicalMap it is treated as its own canonical.
+   * Pass null/undefined canonicalMap to skip deduplication (no-op passthrough).
+   */
+  function deduplicateHitsByCanonical(hits, canonicalMap) {
+    if (!canonicalMap) return hits;
+    var groups = Object.create(null);
+    var order = [];
+    for (var i = 0; i < hits.length; i++) {
+      var h = hits[i];
+      var canon = canonicalMap[h.keyword.toLowerCase()] || h.keyword;
+      var cl = canon.toLowerCase();
+      if (!groups[cl]) {
+        groups[cl] = { keyword: canon, count: 0 };
+        order.push(cl);
+      }
+      if (h.count > groups[cl].count) groups[cl].count = h.count;
+    }
+    return order.map(function (cl) { return groups[cl]; });
   }
 
   /* ── Boolean search parser (LinkedIn Recruiter–style syntax) ── */
@@ -1618,22 +1775,30 @@
    * Pre-open the Notes tab and select "Note to self" early,
    * so the input is ready by the time keyword scan finishes.
    */
-  async function prepareNotesSection(doc, win) {
+  async function prepareNotesSection(doc, win, log) {
+    log = log || [];
     var notesTab = findNotesTab(doc, win);
-    if (!notesTab) return false;
+    if (!notesTab) {
+      log.push({ ok: false, msg: "Notes: tab element not found in DOM — cannot open notes" });
+      return false;
+    }
+    log.push({ ok: true, msg: "Notes: tab found, clicking to open" });
     try { notesTab.scrollIntoView({ block: "center", behavior: "instant" }); } catch (_) {}
     await sleep(50);
     dispatchClickAtElementCenter(notesTab, win, 0.5);
     try { notesTab.click(); } catch (_) {}
     // Poll until notes input is present instead of a fixed sleep
+    var inputFound = false;
     for (var npw = 0; npw < 3000; npw += 200) {
       await sleep(200);
-      if (findNotesInput(doc, win)) break;
+      if (findNotesInput(doc, win)) { inputFound = true; break; }
+    }
+    if (!inputFound) {
+      log.push({ ok: false, msg: "Notes: textarea did not mount within 3s after tab click" });
     }
     var ok = await selectNoteToSelf(doc, win);
+    if (!ok) log.push({ ok: false, msg: "Notes: Note-to-self selection failed or could not verify" });
     // Give SR time to re-render the notes form after note-type selection.
-    // Without this wait, postKeywordHitsToNotes immediately calls findNotesContext
-    // and finds no textarea because the form is mid-render.
     await sleep(600);
     return ok;
   }
@@ -1644,12 +1809,15 @@
     var input = ctx.input;
 
     if (!input) {
-      var notesTab = findNotesTab(doc, win);
-      if (notesTab) {
-        try { notesTab.scrollIntoView({ block: "center", behavior: "instant" }); } catch (_) {}
+      var notesTab2 = findNotesTab(doc, win);
+      if (notesTab2) {
+        log.push({ ok: true, msg: "Notes: tab found in post fn — clicking (was not pre-opened)" });
+        try { notesTab2.scrollIntoView({ block: "center", behavior: "instant" }); } catch (_) {}
         await sleep(50);
-        dispatchClickAtElementCenter(notesTab, win, 0.5);
-        try { notesTab.click(); } catch (_) {}
+        dispatchClickAtElementCenter(notesTab2, win, 0.5);
+        try { notesTab2.click(); } catch (_) {}
+      } else {
+        log.push({ ok: false, msg: "Notes: tab not found in DOM during post attempt" });
       }
       for (var wait = 0; wait < 4000; wait += 200) {
         await sleep(200);
@@ -1659,12 +1827,13 @@
       }
     }
     if (!input) {
-      log.push({ ok: false, msg: "Notes text input not found — could not post." });
+      log.push({ ok: false, msg: "Notes: textarea not found after 4s wait — could not post" });
       return false;
     }
+    log.push({ ok: true, msg: "Notes: textarea found, type=" + (input.tagName || "?").toLowerCase() });
 
     if (!ctx.isNoteToSelf) {
-      log.push({ ok: true, msg: "Note to self not set — selecting now..." });
+      log.push({ ok: true, msg: "Notes: Note-to-self not active — selecting now" });
       await selectNoteToSelf(doc, win);
       ctx = findNotesContext(doc, win);
       if (ctx.input) input = ctx.input;  // textarea may have been remounted by SR
@@ -1679,6 +1848,7 @@
       var curVal = "";
       try { curVal = input.value || ""; } catch (_) {}
       if (curVal.indexOf("Matched") < 0) {
+        log.push({ ok: true, msg: "Notes: native setter did not register — trying execCommand" });
         // Strategy 2: execCommand insertText — browser-native, triggers Angular/React bindings
         var inserted = false;
         try {
@@ -1687,6 +1857,7 @@
           inserted = doc.execCommand("insertText", false, noteText);
         } catch (_) {}
         if (!inserted) {
+          log.push({ ok: true, msg: "Notes: execCommand failed — forcing value + events" });
           // Strategy 3: force value + full event set
           try {
             var _proto = HTMLTextAreaElement.prototype;
@@ -1709,7 +1880,9 @@
       finalInputVal = (itag === "textarea" || itag === "input") ? (input.value || "") : (input.textContent || "");
     } catch (_) {}
     if (!finalInputVal || finalInputVal.indexOf("Matched") < 0) {
-      log.push({ ok: true, msg: "Value verification uncertain — proceeding to post anyway." });
+      log.push({ ok: false, msg: "Notes: value not confirmed in textarea before clicking Post (val='" + String(finalInputVal).slice(0, 40) + "')" });
+    } else {
+      log.push({ ok: true, msg: "Notes: value confirmed in textarea — clicking Post" });
     }
 
     var postBtn = ctx.postBtn;
@@ -1721,7 +1894,7 @@
       }
     }
     if (!postBtn) {
-      log.push({ ok: false, msg: "Notes post button not found — text entered but not submitted." });
+      log.push({ ok: false, msg: "Notes: Post button not found — text entered but not submitted" });
       return false;
     }
 
@@ -1747,13 +1920,13 @@
     // caller to log note✗ and potentially requeue, which is worse than a
     // missed confirmation.
     if (!confirmed) {
-      log.push({ ok: true, msg: "Note click sent, confirmation timeout — assuming posted (" + hitCount + " matches)" });
+      log.push({ ok: true, msg: "Notes: Post clicked, textarea did not clear in 4.5s — assuming submitted" });
       await sleep(800);
       return true;
     }
 
     await sleep(800);
-    log.push({ ok: true, msg: "Note posted and confirmed (" + hitCount + " matches)" });
+    log.push({ ok: true, msg: "Notes: confirmed posted (" + hitCount + " matches)" });
     return true;
   }
 
@@ -1774,7 +1947,12 @@
       return runBooleanTriageWithDoc(doc, win, config, options, log);
     }
 
-    var keywords = resolveKeywords(config.keywords || "");
+    var kwMeta = (typeof resolveKeywordsWithMeta === "function")
+      ? resolveKeywordsWithMeta(config.keywords || "")
+      : { keywords: resolveKeywords(config.keywords || ""), canonicalMap: null, userCount: null };
+    var keywords = kwMeta.keywords;
+    var canonicalMap = kwMeta.canonicalMap;
+    var userKeywordCount = kwMeta.userCount != null ? kwMeta.userCount : keywords.length;
     var postToNotes = !!config.postToNotes;
 
     if (!keywords.length) {
@@ -1782,19 +1960,34 @@
       return { log: log, moved: false, skipped: true, matchedKeywords: [], hitCount: 0 };
     }
 
-    log.push({ ok: true, msg: "Keywords (" + keywords.length + "): " + keywords.slice(0, 8).join(", ") + (keywords.length > 8 ? "..." : "") });
+    log.push({ ok: true, msg: "Keywords (" + userKeywordCount + " → " + keywords.length + " with expansions): " + keywords.slice(0, 8).join(", ") + (keywords.length > 8 ? "..." : "") });
 
     var resumeWaitMs = Math.max(1500, parseInt(config.resumeWaitMs, 10) || 3000);
     var textParts = [];
+
+    // Candidate header (name + title) — always visible, loads instantly.
+    // Catches titles like "IAM SailPoint Developer" that other sources may miss
+    // if the resume viewer renders as canvas or the profile tab doesn't load.
+    var headerText = "";
+    try { headerText = getCandidateHeaderText(doc); } catch (_) {}
+    if (headerText) textParts.push(headerText);
 
     // MutationObserver-based resume wait: start the waiter BEFORE clicking the resume
     // tab so the observer is already watching when SR's SPA mounts the PDF viewer.
     // Resolves as soon as ≥200 chars of resume-viewer text appears (or on timeout).
     var resumeText = "";
-    var resumeWaiter = makeResumeTextWaiter(doc, Math.max(resumeWaitMs, 8000));
+    var resumeWaiter = makeResumeTextWaiter(doc, Math.max(resumeWaitMs, 12000));
     try { await ensureResumeTabActive(doc, win); } catch (_) {}
     try { resumeText = await resumeWaiter; } catch (_) {}
     if (!resumeText) { try { resumeText = getResumeText(doc); } catch (_) {} }
+    // pdf.js text layer fallback — canvas-rendered PDFs have an invisible text
+    // layer overlay whose spans contain the real text.
+    if (!resumeText || resumeText.length < 200) {
+      try {
+        var pdfText = getPdfTextLayerText(doc);
+        if (pdfText.length > (resumeText || "").length) resumeText = pdfText;
+      } catch (_) {}
+    }
     log.push({ ok: !!(resumeText && resumeText.length >= 50),
                msg: "Resume: " + (resumeText ? resumeText.length : 0) + " chars" +
                     (resumeText && resumeText.length < 200 ? " (sparse — continuing scan)" : "") });
@@ -1813,6 +2006,22 @@
 
     var allText = textParts.join("\n\n").trim();
 
+    // Retry once if text is sparse — the SPA may still be rendering.
+    if (allText.length < 200) {
+      log.push({ ok: false, msg: "Sparse text (" + allText.length + " chars) — waiting 3s and retrying extraction" });
+      await sleep(3000);
+      var retryParts = [];
+      try { var rh = getCandidateHeaderText(doc); if (rh) retryParts.push(rh); } catch (_) {}
+      try { var rr = getResumeText(doc); if (rr) retryParts.push(rr); } catch (_) {}
+      try { var rp = getProfileOverviewText(doc); if (rp) retryParts.push(rp); } catch (_) {}
+      try { var rpdf = getPdfTextLayerText(doc); if (rpdf) retryParts.push(rpdf); } catch (_) {}
+      var retryText = retryParts.join("\n\n").trim();
+      if (retryText.length > allText.length) {
+        allText = retryText;
+        log.push({ ok: true, msg: "Retry recovered " + allText.length + " chars" });
+      }
+    }
+
     if (allText.length < 200) {
       var fullPage = "";
       try { fullPage = getFullPageText(doc); } catch (_) {}
@@ -1824,11 +2033,7 @@
     try { excludedKw = getExcludedText(doc); } catch (_) {}
     if (excludedKw) allText = stripExcludedText(allText, excludedKw);
     var textLen = allText.length;
-    log.push({ ok: textLen >= 50, msg: "Total text: " + textLen + " chars (profile: " + (profileText || "").length + ", screening: " + screeningText.length + ")" });
-
-    if (postToNotes) {
-      try { await prepareNotesSection(doc, win); } catch (_) {}
-    }
+    log.push({ ok: textLen >= 50, msg: "Total text: " + textLen + " chars (header: " + (headerText || "").length + ", resume: " + (resumeText || "").length + ", profile: " + (profileText || "").length + ", screening: " + screeningText.length + ")" });
 
     if (textLen < 50) {
       log.push({ ok: false, msg: "Very little text found on page — resume may not have loaded." });
@@ -1836,29 +2041,33 @@
     }
 
     var result = findKeywordHits(allText, keywords);
-    var hitLabels = result.hits.map(function (h) {
+    var dedupedHits = deduplicateHitsByCanonical(result.hits, canonicalMap);
+    var hitLabels = dedupedHits.map(function (h) {
       return h.count > 1 ? h.keyword + " (x" + h.count + ")" : h.keyword;
     });
+    var hitCount = dedupedHits.length;
 
-    log.push({ ok: true, msg: "Matched " + result.hitCount + "/" + keywords.length + " keywords: " + (hitLabels.length ? hitLabels.join(", ") : "(none)") });
+    log.push({ ok: true, msg: "Matched " + hitCount + "/" + userKeywordCount + " keywords: " + (hitLabels.length ? hitLabels.join(", ") : "(none)") });
 
     var notesPosted = false;
-    if (postToNotes && result.hitCount > 0) {
+    // Prepare notes only when there are hits — avoids 1-3s UI work on non-matching profiles
+    if (postToNotes && hitCount > 0) {
+      try { await prepareNotesSection(doc, win, log); } catch (_) {}
       try {
-        notesPosted = await postKeywordHitsToNotes(doc, win, hitLabels, result.hitCount, keywords.length, log);
+        notesPosted = await postKeywordHitsToNotes(doc, win, hitLabels, hitCount, userKeywordCount, log);
       } catch (e) {
         log.push({ ok: false, msg: "Notes post error: " + ((e && e.message) || String(e)) });
       }
     }
 
     var notesFailReason = "";
-    if (!notesPosted && postToNotes && result.hitCount > 0) {
+    if (!notesPosted && postToNotes && hitCount > 0) {
       for (var nfi = log.length - 1; nfi >= 0; nfi--) {
         if (!log[nfi].ok && log[nfi].msg) { notesFailReason = log[nfi].msg; break; }
       }
     }
 
-    return { log: log, moved: false, skipped: false, matchedKeywords: hitLabels, hitCount: result.hitCount, notesPosted: notesPosted, notesFailReason: notesFailReason };
+    return { log: log, moved: false, skipped: false, matchedKeywords: hitLabels, hitCount: hitCount, notesPosted: notesPosted, notesFailReason: notesFailReason };
   }
 
   async function runBooleanTriageWithDoc(doc, win, config, options, log) {
@@ -1869,10 +2078,10 @@
     var booleanQuery = booleanQueryRaw;
     if (closes > opens) {
       for (var mo = 0; mo < closes - opens; mo++) booleanQuery = "(" + booleanQuery;
-      log.push({ ok: true, msg: "Boolean: prepended " + (closes - opens) + " '(' to balance parentheses in pasted query" });
+      log.push({ ok: false, msg: "Boolean: unbalanced parentheses — prepended " + (closes - opens) + " '(' to fix query (check your query)" });
     } else if (opens > closes) {
       for (var mc = 0; mc < opens - closes; mc++) booleanQuery = booleanQuery + ")";
-      log.push({ ok: true, msg: "Boolean: appended " + (opens - closes) + " ')' to balance parentheses" });
+      log.push({ ok: false, msg: "Boolean: unbalanced parentheses — appended " + (opens - closes) + " ')' to fix query (check your query)" });
     }
 
     var ast;
@@ -1907,11 +2116,21 @@
     /* ── Multi-source text extraction — MutationObserver-based resume wait ── */
     var textParts = [];
 
+    var headerText = "";
+    try { headerText = getCandidateHeaderText(doc); } catch (_) {}
+    if (headerText) textParts.push(headerText);
+
     var resumeText = "";
-    var resumeWaiterBool = makeResumeTextWaiter(doc, Math.max(resumeWaitMs, 8000));
+    var resumeWaiterBool = makeResumeTextWaiter(doc, Math.max(resumeWaitMs, 12000));
     try { await ensureResumeTabActive(doc, win); } catch (_) {}
     try { resumeText = await resumeWaiterBool; } catch (_) {}
     if (!resumeText) { try { resumeText = getResumeText(doc); } catch (_) {} }
+    if (!resumeText || resumeText.length < 200) {
+      try {
+        var pdfTextBool = getPdfTextLayerText(doc);
+        if (pdfTextBool.length > (resumeText || "").length) resumeText = pdfTextBool;
+      } catch (_) {}
+    }
     log.push({ ok: !!(resumeText && resumeText.length >= 50),
                msg: "Resume: " + (resumeText ? resumeText.length : 0) + " chars" +
                     (resumeText && resumeText.length < 200 ? " (sparse)" : "") });
@@ -1931,6 +2150,21 @@
     var allText = textParts.join("\n\n").trim();
 
     if (allText.length < 200) {
+      log.push({ ok: false, msg: "Sparse text (" + allText.length + " chars) — waiting 3s and retrying extraction" });
+      await sleep(3000);
+      var retryPartsBool = [];
+      try { var rh2 = getCandidateHeaderText(doc); if (rh2) retryPartsBool.push(rh2); } catch (_) {}
+      try { var rr2 = getResumeText(doc); if (rr2) retryPartsBool.push(rr2); } catch (_) {}
+      try { var rp2 = getProfileOverviewText(doc); if (rp2) retryPartsBool.push(rp2); } catch (_) {}
+      try { var rpdf2 = getPdfTextLayerText(doc); if (rpdf2) retryPartsBool.push(rpdf2); } catch (_) {}
+      var retryTextBool = retryPartsBool.join("\n\n").trim();
+      if (retryTextBool.length > allText.length) {
+        allText = retryTextBool;
+        log.push({ ok: true, msg: "Retry recovered " + allText.length + " chars" });
+      }
+    }
+
+    if (allText.length < 200) {
       log.push({ ok: true, msg: "Low text from targeted selectors (" + allText.length + " chars) — falling back to full page text" });
       var fullPage = "";
       try { fullPage = getFullPageText(doc); } catch (_) {}
@@ -1942,21 +2176,10 @@
     try { excludedBool = getExcludedText(doc); } catch (_) {}
     if (excludedBool) allText = stripExcludedText(allText, excludedBool);
     var textLen = allText.length;
-    log.push({ ok: textLen >= 50, msg: "Total text: " + textLen + " chars (profile: " + profileText.length + ", screening: " + screeningText.length + ")" });
-
-    if (postToNotes) {
-      try {
-        await prepareNotesSection(doc, win);
-      } catch (_) {}
-    }
+    log.push({ ok: textLen >= 50, msg: "Total text: " + textLen + " chars (header: " + (headerText || "").length + ", resume: " + (resumeText || "").length + ", profile: " + profileText.length + ", screening: " + screeningText.length + ")" });
 
     if (textLen < 50) {
       log.push({ ok: false, msg: "Very little text found on page — resume may not have loaded." });
-      if (postToNotes) {
-        try {
-          await postKeywordHitsToNotes(doc, win, ["[NO TEXT EXTRACTED]"], 0, totalTerms, log);
-        } catch (_) {}
-      }
       return { log: log, moved: false, skipped: true, matchedKeywords: [], hitCount: 0 };
     }
 
@@ -2023,6 +2246,7 @@
 
     var notesPosted = false;
     if (postToNotes && allHitLabels.length > 0) {
+      try { await prepareNotesSection(doc, win, log); } catch (_) {}
       var boolPrefix = booleanPass ? "[PASS] " : "[FAIL] ";
       try {
         notesPosted = await postKeywordHitsToNotes(doc, win, allHitLabels, allHitLabels.length, totalTerms, log, boolPrefix);
@@ -2170,6 +2394,7 @@
       sepFlexiblePatternSource: sepFlexiblePatternSource,
       isoListHit: isoListHit,
       findKeywordHits: findKeywordHits,
+      deduplicateHitsByCanonical: deduplicateHitsByCanonical,
       parseBooleanQuery: parseBooleanQuery,
       evaluateBooleanAst: evaluateBooleanAst,
       extractLeafTerms: extractLeafTerms,

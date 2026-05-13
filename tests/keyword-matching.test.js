@@ -8,7 +8,9 @@ const {
   sepFlexiblePatternSource,
   isoListHit,
   findKeywordHits,
+  deduplicateHitsByCanonical,
 } = require('../keyword-triage-core.js');
+const { resolveKeywordsWithMeta } = require('../keyword-expansions.js');
 
 describe('normalizeForKw', () => {
   it('strips zero-width chars', () => {
@@ -160,5 +162,104 @@ describe('findKeywordHits', () => {
   it('deduplicates same keyword (different case input)', () => {
     const { hitCount } = findKeywordHits('python', ['Python', 'python', 'PYTHON']);
     assert.strictEqual(hitCount, 1);
+  });
+});
+
+describe('deduplicateHitsByCanonical', () => {
+  it('collapses expansion aliases to the canonical form', () => {
+    const hits = [
+      { keyword: 'tensorflow', count: 2 },
+      { keyword: 'tensor flow', count: 2 },
+      { keyword: 'tensor-flow', count: 2 },
+    ];
+    const map = { tensorflow: 'tensorflow', 'tensor flow': 'tensorflow', 'tensor-flow': 'tensorflow' };
+    const out = deduplicateHitsByCanonical(hits, map);
+    assert.strictEqual(out.length, 1);
+    assert.strictEqual(out[0].keyword, 'tensorflow');
+    assert.strictEqual(out[0].count, 2);
+  });
+
+  it('keeps distinct canonical keywords separate', () => {
+    const hits = [
+      { keyword: 'pytorch', count: 2 },
+      { keyword: 'py torch', count: 2 },
+      { keyword: 'tensorflow', count: 1 },
+    ];
+    const map = { pytorch: 'pytorch', 'py torch': 'pytorch', tensorflow: 'tensorflow' };
+    const out = deduplicateHitsByCanonical(hits, map);
+    assert.strictEqual(out.length, 2);
+    assert.ok(out.some(h => h.keyword === 'pytorch' && h.count === 2));
+    assert.ok(out.some(h => h.keyword === 'tensorflow' && h.count === 1));
+  });
+
+  it('uses max count across the alias group', () => {
+    // e.g. standalone "torch" appears more often than "pytorch" itself
+    const hits = [
+      { keyword: 'pytorch', count: 1 },
+      { keyword: 'torch', count: 3 },
+    ];
+    const map = { pytorch: 'pytorch', torch: 'pytorch' };
+    const out = deduplicateHitsByCanonical(hits, map);
+    assert.strictEqual(out.length, 1);
+    assert.strictEqual(out[0].count, 3);
+  });
+
+  it('reports canonical name even when only an expansion matched', () => {
+    // resume says "py torch" never "pytorch"
+    const hits = [{ keyword: 'py torch', count: 2 }];
+    const map = { pytorch: 'pytorch', 'py torch': 'pytorch', 'py-torch': 'pytorch' };
+    const out = deduplicateHitsByCanonical(hits, map);
+    assert.strictEqual(out.length, 1);
+    assert.strictEqual(out[0].keyword, 'pytorch');
+    assert.strictEqual(out[0].count, 2);
+  });
+
+  it('is a no-op when canonicalMap is null', () => {
+    const hits = [{ keyword: 'python', count: 1 }];
+    const out = deduplicateHitsByCanonical(hits, null);
+    assert.deepEqual(out, hits);
+  });
+
+  it('preserves insertion order of first canonical appearance', () => {
+    const hits = [
+      { keyword: 'py torch', count: 1 },
+      { keyword: 'tensorflow', count: 1 },
+      { keyword: 'pytorch', count: 1 },
+    ];
+    const map = { pytorch: 'pytorch', 'py torch': 'pytorch', tensorflow: 'tensorflow' };
+    const out = deduplicateHitsByCanonical(hits, map);
+    // "pytorch" group encountered first via "py torch", tensorflow second
+    assert.strictEqual(out[0].keyword, 'pytorch');
+    assert.strictEqual(out[1].keyword, 'tensorflow');
+  });
+});
+
+describe('findKeywordHits + deduplicateHitsByCanonical integration', () => {
+  it('PyTorch in text → one "pytorch" entry, not pytorch + py torch separately', () => {
+    const text = 'Extensive experience with PyTorch and pytorch lightning';
+    const { keywords, canonicalMap } = resolveKeywordsWithMeta('pytorch');
+    const { hits } = findKeywordHits(text, keywords);
+    const out = deduplicateHitsByCanonical(hits, canonicalMap);
+    assert.strictEqual(out.length, 1);
+    assert.strictEqual(out[0].keyword, 'pytorch');
+  });
+
+  it('TensorFlow in text → one "tensorflow" entry, not three alias entries', () => {
+    const text = 'Built production models in TensorFlow 2 and Keras';
+    const { keywords, canonicalMap } = resolveKeywordsWithMeta('tensorflow');
+    const { hits } = findKeywordHits(text, keywords);
+    const out = deduplicateHitsByCanonical(hits, canonicalMap);
+    assert.strictEqual(out.length, 1);
+    assert.strictEqual(out[0].keyword, 'tensorflow');
+  });
+
+  it('hitCount equals number of distinct user keywords found', () => {
+    const text = 'Skilled in PyTorch, TensorFlow, and scikit-learn';
+    const { keywords, canonicalMap, userCount } = resolveKeywordsWithMeta('pytorch, tensorflow, sklearn');
+    const { hits } = findKeywordHits(text, keywords);
+    const out = deduplicateHitsByCanonical(hits, canonicalMap);
+    // All 3 user keywords should be found, regardless of how many aliases also matched
+    assert.strictEqual(out.length, 3);
+    assert.strictEqual(userCount, 3);
   });
 });

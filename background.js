@@ -86,8 +86,8 @@ async function launchNextWorker() {
     const tab = await chrome.tabs.create({ url: url, active: false });
     parallelQueue.active.set(tab.id, url);
   } catch (e) {
-    parallelQueue.results.push({ url: url, error: "tab_create_failed: " + (e && e.message) });
-    setTimeout(launchNextWorker, jitter(800));
+    if (parallelQueue) parallelQueue.urls.unshift(url);
+    setTimeout(launchNextWorker, jitter(1600));
   }
 }
 

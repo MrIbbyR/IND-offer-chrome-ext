@@ -947,7 +947,7 @@ loadKwSettings().catch(() => {});
 async function ensureKeywordCore(tabId) {
   await chrome.scripting.executeScript({
     target: { tabId, allFrames: false },
-    files: ["sr-list-autoscroll.js", "keyword-triage-core.js"],
+    files: ["keyword-expansions.js", "sr-list-autoscroll.js", "keyword-triage-core.js"],
   });
 }
 
