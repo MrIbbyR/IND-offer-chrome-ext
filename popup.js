@@ -375,22 +375,42 @@ runBtn.addEventListener("click", async () => {
   // Get active tab and inject into ALL frames — form may be in an iframe
   const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
 
-  let results;
-  try {
-    results = await chrome.scripting.executeScript({
-      target: { tabId: tab.id, allFrames: true },
-      func: contentFill,
-      args: [payload],
-    });
-  } catch (e) {
-    setStatus("error", "Injection failed");
-    log("✗", "Could not inject: " + e.message);
+  if (!tab?.id) {
+    setStatus("error", "No active tab found");
+    log("✗", "Open the SmartRecruiters offer form in the active tab, then click Fill Form Now.");
     runBtn.disabled = false;
     return;
   }
 
-  // Always show logs from ALL frames (including diagnostic-only frames)
+  log("·", `Scanning: ${(tab.url || "").slice(0, 80)}`);
+
+  let results;
+  const FILL_TIMEOUT_MS = 15000;
+  try {
+    results = await Promise.race([
+      chrome.scripting.executeScript({
+        target: { tabId: tab.id, allFrames: true },
+        func: contentFill,
+        args: [payload],
+      }),
+      new Promise((_, reject) =>
+        setTimeout(() => reject(new Error(
+          `Timed out after ${FILL_TIMEOUT_MS / 1000}s — page may still be loading, or the form has too many components`
+        )), FILL_TIMEOUT_MS)
+      ),
+    ]);
+  } catch (e) {
+    setStatus("error", "Injection failed");
+    log("✗", e.message);
+    runBtn.disabled = false;
+    return;
+  }
+
+  // Show logs + any per-frame errors from ALL frames
   for (const r of results || []) {
+    if (r?.error) {
+      log("✗", `Frame error: ${r.error.message || String(r.error)}`);
+    }
     if (r?.result?.log?.length) {
       for (const e of r.result.log) log(e.ok ? "✓" : "✗", e.msg);
     }
@@ -399,7 +419,8 @@ runBtn.addEventListener("click", async () => {
   const activeFrames = results?.filter(r => r?.result && !r.result.frameSkipped) || [];
 
   if (activeFrames.length === 0) {
-    setStatus("error", "Form not found — see logs above");
+    setStatus("error", "Form not found");
+    log("✗", "No SmartRecruiters offer form fields found. Make sure the offer form is open and visible on screen, then try again.");
     runBtn.disabled = false;
     return;
   }
@@ -431,6 +452,7 @@ runBtn.addEventListener("click", async () => {
 // ── Cost assist: queue from Applicants list ──
 btnSalaryQueue.addEventListener("click", async () => {
   await saveSalarySettings().catch(() => {});
+  try { await chrome.storage.local.remove("srAbortAll"); } catch (_) {}
   const cfg = readSalaryConfig();
   const maxParsed = parseCostAssistBudgetInput(cfg.maxSalary);
   if (!isFinite(maxParsed) || maxParsed <= 0) {
@@ -486,27 +508,22 @@ btnSalaryQueue.addEventListener("click", async () => {
 
 // ── Stop queue ──
 btnSalaryStop.addEventListener("click", async () => {
-  const tab = await getSmartRecruitersTab();
   salaryStatusBox.classList.add("visible");
   salaryLogEl.innerHTML = "";
-  if (!tab) {
-    salaryLog("✗", "Open a SmartRecruiters tab to clear queue.");
-    return;
-  }
+  // Abort flag fires in all tab polling loops within ~200 ms — no tab lookup needed
+  try { await chrome.storage.local.set({ srAbortAll: true }); } catch (_) {}
+  // Clear sessionStorage in every open SR tab (not just the active one)
   try {
-    await chrome.scripting.executeScript({
-      target: { tabId: tab.id, allFrames: false },
-      func: () => {
-        try {
-          sessionStorage.removeItem("sr_ext_salary_triage_v1");
-        } catch (_) {}
-      },
-    });
-    salaryLog("✓", "Cost assist queue cleared.");
-    setSalaryStatus("salary-done", "Stopped");
-  } catch (e) {
-    salaryLog("✗", String(e?.message || e));
-  }
+    const tabs = await chrome.tabs.query({ url: "*://*.smartrecruiters.com/*" });
+    await Promise.allSettled(tabs.map(t =>
+      chrome.scripting.executeScript({
+        target: { tabId: t.id, allFrames: false },
+        func: () => { try { sessionStorage.removeItem("sr_ext_salary_triage_v1"); } catch (_) {} },
+      })
+    ));
+  } catch (_) {}
+  salaryLog("✓", "Cost assist stopped.");
+  setSalaryStatus("salary-done", "Stopped");
 });
 
 // ── Keyword Search: DOM refs ──
@@ -936,6 +953,7 @@ async function ensureKeywordCore(tabId) {
 
 async function handleKwGo(workers) {
   await saveKwSettings().catch(() => {});
+  try { await chrome.storage.local.remove("srAbortAll"); } catch (_) {}
   const cfg = readKwConfig(workers);
   if (cfg.mode === "boolean") {
     if (!cfg.booleanQuery) {
@@ -1023,30 +1041,27 @@ btnKwGo3x.addEventListener("click", () => handleKwGo(3));
 btnKwStop.addEventListener("click", async () => {
   kwStatusBox.classList.add("visible");
   kwLogEl.innerHTML = "";
+  // Abort flag fires in all tab polling loops within ~200 ms — no tab lookup needed
+  try { await chrome.storage.local.set({ srAbortAll: true }); } catch (_) {}
+  // Tell background to stop parallel queue (closes worker tabs if SW is alive)
+  try { await chrome.runtime.sendMessage({ type: "srStopParallelKeywordQueue" }); } catch (_) {}
+  // Clear sessionStorage and close worker tabs directly — handles dead service worker case
   try {
-    await chrome.runtime.sendMessage({ type: "srStopParallelKeywordQueue" });
+    const tabs = await chrome.tabs.query({ url: "*://*.smartrecruiters.com/*" });
+    await Promise.allSettled(tabs.map(t =>
+      chrome.scripting.executeScript({
+        target: { tabId: t.id, allFrames: false },
+        func: () => { try { sessionStorage.removeItem("sr_ext_keyword_triage_v1"); } catch (_) {} },
+      })
+    ));
+    // Close background profile tabs (parallel worker tabs opened by extension)
+    const workerTabs = tabs.filter(t =>
+      !t.active && /\/app\/people\/(applications|profile)\//i.test(t.url || "")
+    );
+    if (workerTabs.length) await chrome.tabs.remove(workerTabs.map(t => t.id)).catch(() => {});
   } catch (_) {}
-
-  const tab = await getSmartRecruitersTab();
-  if (!tab) {
-    kwLog("✓", "Parallel queue stopped (if any). Open a SmartRecruiters tab to clear single-tab queue.");
-    setKwStatus("salary-done", "Stopped");
-    return;
-  }
-  try {
-    await chrome.scripting.executeScript({
-      target: { tabId: tab.id, allFrames: false },
-      func: () => {
-        try {
-          sessionStorage.removeItem("sr_ext_keyword_triage_v1");
-        } catch (_) {}
-      },
-    });
-    kwLog("✓", "Keyword search queue cleared.");
-    setKwStatus("salary-done", "Stopped");
-  } catch (e) {
-    kwLog("✗", String(e?.message || e));
-  }
+  kwLog("✓", "Keyword search stopped.");
+  setKwStatus("salary-done", "Stopped");
 });
 
 // ── View Last Run diagnostics ──
@@ -1129,10 +1144,13 @@ function contentFill(payload) {
     log.push({ ok: true, msg: `Frame: ${url.slice(0, 70)}` });
 
     // ── Helper: find all visible SmartRecruiters form blocks ────────────────
+    // spl-form-element is an SR web component tag name; [id^="spl-form-element_"] is
+    // a legacy ID-attribute fallback for older SR builds.
     function getBlocks() {
-      const raw = Array.from(
-        doc.querySelectorAll('[id^="spl-form-element_"]')
-      );
+      let raw = Array.from(doc.querySelectorAll('spl-form-element'));
+      if (!raw.length) {
+        raw = Array.from(doc.querySelectorAll('[id^="spl-form-element_"]'));
+      }
       return raw.filter(el => {
         const style = win.getComputedStyle(el);
         return style && style.display !== "none" && style.visibility !== "hidden";
@@ -1234,7 +1252,7 @@ function contentFill(payload) {
     const blockElements = getBlocks();
     if (!blockElements.length) {
       const bodySnip = (doc.body?.innerText || "").replace(/\s+/g, " ").slice(0, 100);
-      log.push({ ok: false, msg: `No SmartRecruiters blocks found (id^="spl-form-element_").` });
+      log.push({ ok: false, msg: `No spl-form-element blocks found on this frame.` });
       log.push({ ok: true,  msg: `Page text: "${bodySnip}"` });
       return { filled: 0, currencies: 0, log, frameSkipped: true };
     }
@@ -1317,7 +1335,7 @@ function contentFill(payload) {
       return out;
     }
 
-    async function changeAllCurrenciesLikePython() {
+    async function changeAllCurrenciesLikePython(allBlocks) {
       const CURRENCY_RE = /^[A-Z]{3}$/;
       let changed = 0;
       let attempted = 0;
@@ -1342,82 +1360,64 @@ function contentFill(payload) {
         currencies++;
       }
 
-      // ── Pass 2: SR web-component currency pickers (spl-dropdown, spl-select, etc.) ──
-      // SR offer form currency pickers expose their current value via the `value` attribute
-      // on the host element (e.g. <spl-dropdown value="USD">). We find any such element
-      // whose value is a 3-letter currency code that is not already TARGET.
-      const componentCandidates = collectDeep(doc.documentElement, n => {
-        if (n.nodeType !== Node.ELEMENT_NODE) return false;
-        const tag = n.tagName.toLowerCase();
-        const role = (n.getAttribute?.('role') || '').toLowerCase();
-        if (!tag.startsWith('spl-') && !tag.startsWith('sr-') && role !== 'combobox') return false;
-        const val = (n.getAttribute?.('value') || '').trim();
-        return CURRENCY_RE.test(val) && val !== TARGET;
-      });
+      // ── Pass 2: SR web-component currency pickers ──
+      // Search within each form block rather than the whole document.
+      // Whole-document search finds the same dropdown 2-3× through nested shadow levels
+      // (spl-form-element → spl-dropdown → spl-select all carry value="USD"), multiplying
+      // the 700ms/candidate cost by 2-3× and causing 30+ second hangs on 17-field forms.
+      // Per-block search picks only the deepest (actual control) candidate per field.
+      const seen = new Set();
+      const componentCandidates = [];
+      for (const block of (allBlocks || [])) {
+        const inBlock = collectDeep(block.el, n => {
+          if (n.nodeType !== Node.ELEMENT_NODE) return false;
+          const tag = n.tagName.toLowerCase();
+          const role = (n.getAttribute?.('role') || '').toLowerCase();
+          if (!tag.startsWith('spl-') && !tag.startsWith('sr-') && role !== 'combobox') return false;
+          const val = (n.getAttribute?.('value') || '').trim();
+          return CURRENCY_RE.test(val) && val !== TARGET;
+        });
+        // Take the deepest match (the actual dropdown control, not the outer wrapper)
+        if (inBlock.length) {
+          const pick = inBlock[inBlock.length - 1];
+          if (!seen.has(pick)) {
+            seen.add(pick);
+            componentCandidates.push(pick);
+          }
+        }
+      }
+      log.push({ ok: true, msg: `Currency candidates: ${componentCandidates.length} (1 per block)` });
 
       for (const comp of componentCandidates) {
         const prevVal = comp.getAttribute('value') || '';
         attempted++;
 
-        // Attempt A: programmatic setter — some SPL components expose .value on the prototype.
-        let setOk = false;
+        // Attempt A only: programmatic prototype setter (synchronous, no sleeps).
+        // Click-based fallback (Attempt B) was removed — it required 400–700 ms per candidate
+        // and caused 30+ second hangs on forms with many currency fields. If the setter
+        // isn't exposed by this SR build, the user changes remaining fields manually
+        // (the "Currency change must be done manually" note already tells them this).
         try {
           const desc = Object.getOwnPropertyDescriptor(Object.getPrototypeOf(comp), 'value');
           if (desc?.set) {
             desc.set.call(comp, TARGET);
             comp.dispatchEvent(new win.Event('change', { bubbles: true }));
             comp.dispatchEvent(new win.CustomEvent('spl-change', { bubbles: true, detail: { value: TARGET } }));
-            log.push({ ok: true, msg: `Currency component (setter): ${prevVal} → ${TARGET}` });
+            log.push({ ok: true, msg: `Currency: ${prevVal} → ${TARGET}` });
             changed++;
             currencies++;
-            setOk = true;
+          } else {
+            log.push({ ok: false, msg: `Currency ${prevVal}: no setter — change manually` });
           }
-        } catch (_) {}
-        if (setOk) continue;
-
-        // Attempt B: click the trigger button inside the shadow root to open the dropdown,
-        // then click the TARGET option. SR may render the option panel as a body-level portal,
-        // so we scan the entire document for the option after opening.
-        const triggerBtn = collectDeep(comp, n =>
-          n.nodeType === Node.ELEMENT_NODE &&
-          (n.tagName === 'BUTTON' || (n.getAttribute?.('role') || '') === 'button') &&
-          !n.disabled
-        )[0] || comp;
-
-        try { triggerBtn.click(); } catch (_) {}
-        await sleep(400);
-
-        const inrOpt = collectDeep(doc.documentElement, n => {
-          if (n.nodeType !== Node.ELEMENT_NODE) return false;
-          const tag = n.tagName.toLowerCase();
-          const role = (n.getAttribute?.('role') || '').toLowerCase();
-          const isOpt = tag === 'option' || tag === 'spl-option' ||
-                        role === 'option' || role === 'menuitem';
-          return isOpt && (n.textContent || '').trim() === TARGET;
-        })[0];
-
-        if (inrOpt) {
-          try { inrOpt.click(); } catch (_) {}
-          await sleep(300);
-          log.push({ ok: true, msg: `Currency dropdown (click): ${prevVal} → ${TARGET}` });
-          changed++;
-          currencies++;
-        } else {
-          // Close the accidentally-opened dropdown and warn.
-          try {
-            triggerBtn.dispatchEvent(
-              new win.KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true })
-            );
-          } catch (_) {}
-          await sleep(150);
-          log.push({ ok: false, msg: `Currency dropdown ${prevVal}: opened but "${TARGET}" option not found — set manually` });
+        } catch (_) {
+          log.push({ ok: false, msg: `Currency ${prevVal}: setter threw — change manually` });
         }
       }
 
       if (attempted === 0) {
         log.push({ ok: true, msg: 'No currency dropdowns need changing' });
       } else if (changed < attempted) {
-        log.push({ ok: false, msg: `Changed ${changed}/${attempted} currency fields — check remaining manually` });
+        log.push({ ok: false, msg: `Auto-changed ${changed}/${attempted} currency fields — set remaining to ${TARGET} manually` });
       }
     }
 
@@ -1504,9 +1504,9 @@ function contentFill(payload) {
         const target = doc.elementFromPoint(clickX, clickY) || blockEl;
 
         try {
-          target.scrollIntoView({ block: "center", behavior: "smooth" });
+          target.scrollIntoView({ block: "center", behavior: "instant" });
         } catch (_) {}
-        await sleep(80);
+        await sleep(20);
 
         const evtOpts = {
           bubbles: true,
@@ -1518,7 +1518,7 @@ function contentFill(payload) {
         target.dispatchEvent(new win.MouseEvent("mouseup", evtOpts));
         target.dispatchEvent(new win.MouseEvent("click", evtOpts));
 
-        await sleep(80);
+        await sleep(20);
 
         const active = doc.activeElement;
         const finalInput = inputTarget || (active && active.tagName === "INPUT" ? active : null);
@@ -1528,12 +1528,12 @@ function contentFill(payload) {
 
         filled++;
         log.push({ ok: true, msg: `[${idx}] ${label}: ${value} ✓` });
-        await sleep(40);
+        await sleep(15);
       }
     }
 
     await changeAllCurrenciesLikePython(blocks);
-    await sleep(300);
+    await sleep(100);
     await fillFieldsLikePython(blocks);
 
     return { filled, currencies, log };

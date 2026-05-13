@@ -5,6 +5,13 @@
 
   const KEY = "sr_ext_salary_triage_v1";
 
+  let __aborted = false;
+  try {
+    chrome.storage.onChanged.addListener(function (changes, area) {
+      if (area === "local" && changes.srAbortAll && changes.srAbortAll.newValue) __aborted = true;
+    });
+  } catch (_) {}
+
   function sleep(ms) {
     return new Promise(function (r) {
       setTimeout(r, ms);
@@ -37,6 +44,7 @@
     const step = 200;
     const start = Date.now();
     while (Date.now() - start < maxMs) {
+      if (__aborted) return false;
       if (isProfilePage()) return true;
       await sleep(step);
     }
@@ -47,6 +55,7 @@
     const step = 200;
     const start = Date.now();
     while (Date.now() - start < maxMs) {
+      if (__aborted) return false;
       if (isProfilePage() && hasSrQueueControls()) return true;
       await sleep(step);
     }
@@ -196,6 +205,12 @@
       return;
     }
 
+    __aborted = false;
+    try {
+      const stored = await new Promise(function (r) { chrome.storage.local.get(["srAbortAll"], r); });
+      if (stored && stored.srAbortAll) { sessionStorage.removeItem(KEY); return; }
+    } catch (_) {}
+
     if (typeof globalThis.__srSalaryTriageRun !== "function" && typeof globalThis.__srSalaryTriageRunMulti !== "function")
       return;
 
@@ -241,6 +256,7 @@
       await sleep(delay);
 
       const controlsOk = await waitUntilSrControlsReady(queueReadyCap);
+      if (__aborted) { sessionStorage.removeItem(KEY); return; }
       if (!controlsOk) {
         showToast("Cost assist: pipeline UI not ready — increase Wait after Screening or check network.");
         state.log = (state.log || []).concat([

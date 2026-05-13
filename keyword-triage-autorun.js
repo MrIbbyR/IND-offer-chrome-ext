@@ -5,6 +5,13 @@
 
   var KEY = "sr_ext_keyword_triage_v1";
 
+  var __aborted = false;
+  try {
+    chrome.storage.onChanged.addListener(function (changes, area) {
+      if (area === "local" && changes.srAbortAll && changes.srAbortAll.newValue) __aborted = true;
+    });
+  } catch (_) {}
+
   function sleep(ms) {
     return new Promise(function (r) { setTimeout(r, ms); });
   }
@@ -43,6 +50,7 @@
     var step = 200;
     var start = Date.now();
     while (Date.now() - start < maxMs) {
+      if (__aborted) return false;
       if (isProfilePage()) return true;
       await sleep(step);
     }
@@ -53,6 +61,7 @@
     var step = 200;
     var start = Date.now();
     while (Date.now() - start < maxMs) {
+      if (__aborted) return false;
       if (isProfilePage() && hasSrQueueControls()) return true;
       await sleep(step);
     }
@@ -304,6 +313,12 @@
       return;
     }
 
+    __aborted = false;
+    try {
+      var stored = await new Promise(function (r) { chrome.storage.local.get(["srAbortAll"], r); });
+      if (stored && stored.srAbortAll) { sessionStorage.removeItem(KEY); return; }
+    } catch (_) {}
+
     if (typeof globalThis.__srKeywordTriageRun !== "function" &&
         typeof globalThis.__srKeywordTriageRunMulti !== "function") return;
 
@@ -347,6 +362,7 @@
       await sleep(delay);
 
       var controlsOk = await waitUntilSrControlsReady(queueReadyCap);
+      if (__aborted) { sessionStorage.removeItem(KEY); return; }
       if (!controlsOk) {
         showToast("Keyword search: pipeline UI not ready — check network.");
         state.log = (state.log || []).concat([
