@@ -6,15 +6,15 @@ A Manifest V3 Chrome extension that automates repetitive Talent Acquisition work
 
 ## Features
 
-### Offer Letter Auto-Fill
-Drag & drop excel datapoint into SmartRecruiters offer page. Supports annual ↔ monthly derivation, fuzzy label matching, and Angular/React-compatible input dispatch.
+### Cntrl + F Keyword Skills Tagging
+Tag Smartrecruiters profiles with user defined keywords automating a recruiters cntrl +F  
+Boolean tab where user can paste a search and tag keywords which hit the profiles 
 
 ### Cost Assist — Salary Budget Screening
 Specify salary range within fields and prospects who fit in that range auto-advances in-budget candidates with **Move Forward**.
 
-### Cntrl + F Keyword Skills Tagging
-Tag Smartrecruiters profiles with user defined keywords automating a recruiters cntrl +F  
-Boolean tab where user can paste a search and tag keywords which hit the profiles 
+### Offer Letter Auto-Fill
+Drag & drop excel datapoint into SmartRecruiters offer page. Supports annual ↔ monthly derivation, fuzzy label matching, and Angular/React-compatible input dispatch.
 
 | Mode | Description |
 |---|---|
