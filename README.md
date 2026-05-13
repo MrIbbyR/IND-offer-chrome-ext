@@ -12,9 +12,9 @@ Drag & drop excel datapoint into SmartRecruiters offer page. Supports annual ↔
 ### Cost Assist — Salary Budget Screening
 Specify salary range within fields and prospects who fit in that range auto-advances in-budget candidates with **Move Forward**.
 
-### Keyword Search — Skills Tagging
+### Cntrl + F Keyword Skills Tagging
 Tag Smartrecruiters profiles with user defined keywords automating a recruiters cntrl +F  
-Boolean tab where user can paste a search and tag keywords which land
+Boolean tab where user can paste a search and tag keywords which hit the profiles 
 
 | Mode | Description |
 |---|---|
