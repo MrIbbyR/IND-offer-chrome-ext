@@ -99,22 +99,86 @@ var KEYWORD_EXPANSIONS = {
   "idp":         ["intelligent document processing"],
   "resilience":  ["resiliency", "resilient"],
   "resiliency":  ["resilience", "resilient"],
+
+  // ── Cloud / Kubernetes managed services ──
+  // Abbreviations a recruiter types that the resume may write in full.
+  "gke":                       ["google kubernetes engine"],
+  "google kubernetes engine":  ["gke"],
+  "eks":                       ["amazon elastic kubernetes service"],
+  "amazon elastic kubernetes service": ["eks"],
+  "aks":                       ["azure kubernetes service"],
+  "azure kubernetes service":  ["aks"],
+
+  // ── IAM protocol / standard abbreviations ──
+  "sso":                       ["single sign-on", "single sign on"],
+  "single sign-on":            ["sso"],
+  "single sign on":            ["sso"],
+  "mfa":                       ["multi-factor authentication", "multifactor authentication", "two-factor authentication", "2fa"],
+  "2fa":                       ["mfa", "multi-factor authentication", "two-factor authentication"],
+  "multi-factor authentication": ["mfa", "2fa"],
+  "saml":                      ["security assertion markup language"],
+  "oauth":                     ["oauth 2.0", "open authorization"],
+  "oidc":                      ["openid connect"],
+  "openid connect":            ["oidc"],
+  "ldap":                      ["lightweight directory access protocol"],
+  "active directory":          ["microsoft active directory"],
+  "azure ad":                  ["azure active directory", "entra id", "microsoft entra"],
+  "entra":                     ["entra id", "azure ad", "azure active directory"],
+  "entra id":                  ["azure ad", "azure active directory", "microsoft entra"],
+
+  // ── PAM / identity governance tools ──
+  "cyberark":                  ["cyber ark"],
+  "cyber ark":                 ["cyberark"],
+  "forgerock":                 ["forge rock"],
+  "forge rock":                ["forgerock"],
+  "beyondtrust":               ["beyond trust"],
+  "beyond trust":              ["beyondtrust"],
+  "pam":                       ["privileged access management"],
+  "privileged access management": ["pam"],
+  "iga":                       ["identity governance and administration", "identity governance"],
+  "identity governance":       ["iga"],
+
+  // ── IAM / Identity & Access Management tools ──
+  // ping / pingidentity: typed as one word but resumes often write "Ping Identity" (two words).
+  // "ping" expands to compound forms; "pingidentity" expands to the spaced two-word form
+  // so both canonicals hit for any way a resume can write the product name.
+  "ping":            ["pingidentity", "ping federate", "pingfederate", "ping one"],
+  "pingidentity":    ["ping identity", "ping federate", "pingfederate"],
+  "ping federate":   ["pingfederate"],
+  "pingfederate":    ["ping federate"],
+  // sailpoint: SailPoint is almost always written as one CamelCase word ("SailPoint") or two
+  // words ("Sail Point"); the regex catches SailPoint but misses the spaced form.
+  "sailpoint":       ["sail point", "sailpoint iiq", "sailpoint identitynow"],
+  "sail point":      ["sailpoint"],
+  // okta: single token, matches all case forms natively — minimal expansions for sub-products.
+  "okta":            ["okta workforce", "okta verify", "okta sso"],
+  // ciam: the spelled-out form appears frequently in job descriptions and resumes.
+  "ciam":            ["customer identity and access management",
+                      "consumer identity and access management",
+                      "customer iam"],
+  // iam: general IAM — useful when recruiter types the abbreviation.
+  "iam":             ["identity and access management", "identity access management"],
+  "identity and access management": ["iam"],
 };
 
 var KEYWORD_TYPO_ALIASES = {
-  pytroch:       "pytorch",
-  pytoch:        "pytorch",
-  tensorlfow:    "tensorflow",
-  tensorfow:     "tensorflow",
-  tenserflow:    "tensorflow",
-  azuer:         "azure",
-  resilence:     "resilience",
-  reslience:     "resilience",
-  resliency:     "resiliency",
-  scikitlearn:   "scikit-learn",
-  sckitlearn:    "scikit-learn",
-  hugginface:    "hugging face",
-  huggingfaces:  "hugging face",
+  pytroch:         "pytorch",
+  pytoch:          "pytorch",
+  tensorlfow:      "tensorflow",
+  tensorfow:       "tensorflow",
+  tenserflow:      "tensorflow",
+  azuer:           "azure",
+  resilence:       "resilience",
+  reslience:       "resilience",
+  resliency:       "resiliency",
+  scikitlearn:     "scikit-learn",
+  sckitlearn:      "scikit-learn",
+  hugginface:      "hugging face",
+  huggingfaces:    "hugging face",
+  sailpiont:       "sailpoint",
+  salipoint:       "sailpoint",
+  pingidentiy:     "pingidentity",
+  pingidentitiy:   "pingidentity",
 };
 
 function parseKeywordsFromString(s) {

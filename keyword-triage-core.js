@@ -261,7 +261,9 @@
 
     for (var i = 0; i < selectors.length; i++) {
       try {
-        var els = root.querySelectorAll(selectors[i]);
+        // queryDeepSelectorAll pierces shadow roots so sr-resume-viewer nested inside
+        // a spl-tab-container shadow host is still reachable.
+        var els = queryDeepSelectorAll(root, null, selectors[i]);
         for (var j = 0; j < els.length; j++) collectFromEl(els[j]);
       } catch (_) {}
     }
@@ -336,7 +338,7 @@
 
     for (var i = 0; i < selectors.length; i++) {
       try {
-        var els = root.querySelectorAll(selectors[i]);
+        var els = queryDeepSelectorAll(root, null, selectors[i]);
         for (var j = 0; j < els.length; j++) collectFromEl(els[j]);
       } catch (_) {}
     }
@@ -409,6 +411,7 @@
    */
   function getPdfTextLayerText(doc) {
     var chunks = [];
+    var pdfRoot = doc.querySelector("#st-candidateView") || doc.body || doc.documentElement;
     var selectors = [
       ".textLayer span",
       '[class*="textLayer"] span',
@@ -417,7 +420,8 @@
     ];
     for (var si = 0; si < selectors.length; si++) {
       try {
-        var spans = doc.querySelectorAll(selectors[si]);
+        // Pierce shadow roots — pdf.js text layers live inside sr-resume-viewer's shadow DOM.
+        var spans = queryDeepSelectorAll(pdfRoot, null, selectors[si]);
         if (spans.length > 20) {
           var parts = [];
           for (var i = 0; i < spans.length; i++) {
@@ -474,7 +478,7 @@
 
     for (var i = 0; i < selectors.length; i++) {
       try {
-        var els = root.querySelectorAll(selectors[i]);
+        var els = queryDeepSelectorAll(root, null, selectors[i]);
         for (var j = 0; j < els.length; j++) {
           var deep = collectDeepText(els[j], 30);
           for (var d = 0; d < deep.length; d++) chunks.push(deep[d]);
@@ -1446,10 +1450,24 @@
   function getNotesSection(doc) {
     var sec = null;
     try { sec = doc.querySelector("#st-notes"); } catch (_) {}
+    // #st-notes may be a <spl-tab> (tab button) rather than the notes form panel.
+    // When it's a tab, the form lives elsewhere — return null so callers fall back to body.
+    if (sec) {
+      var stag = (sec.tagName || "").toLowerCase();
+      if (stag === "spl-tab" || (sec.getAttribute && sec.getAttribute("role") === "tab")) sec = null;
+    }
     if (!sec) try { sec = doc.querySelector('[data-test="notes"]'); } catch (_) {}
     if (!sec) try { sec = doc.querySelector("sr-notes"); } catch (_) {}
     if (!sec) try { sec = doc.querySelector("app-notes"); } catch (_) {}
-    if (!sec) try { sec = findElementByIdDeep(doc.documentElement || doc.body, "st-notes"); } catch (_) {}
+    if (!sec) {
+      try {
+        var deep = findElementByIdDeep(doc.documentElement || doc.body, "st-notes");
+        if (deep) {
+          var dtag = (deep.tagName || "").toLowerCase();
+          if (dtag !== "spl-tab" && !(deep.getAttribute && deep.getAttribute("role") === "tab")) sec = deep;
+        }
+      } catch (_) {}
+    }
     return sec;
   }
 
@@ -1556,29 +1574,20 @@
   }
 
   function findNotesPostButton(doc, win) {
-    for (var idx = 0; idx <= 5; idx++) {
+    // Pass 1: search all spl-form-element containers (ID index varies per page load)
+    var formEls = doc.querySelectorAll('[id^="spl-form-element_"]');
+    for (var fi = 0; fi < formEls.length; fi++) {
       try {
-        var allBtns = doc.querySelectorAll("#spl-form-element_" + idx + " > div > div > spl-button");
+        var allBtns = formEls[fi].querySelectorAll("spl-button");
         for (var b = 0; b < allBtns.length; b++) {
-          var btn = allBtns[b];
-          if (!isVisible(btn, win)) continue;
-          if (btn.closest && btn.closest("spl-dropdown")) continue;
-          var txt = getDeepText(btn);
-          if (/post|save|submit/i.test(txt)) return btn;
+          if (!isVisible(allBtns[b], win)) continue;
+          if (allBtns[b].closest && allBtns[b].closest("spl-dropdown")) continue;
+          var txt = getDeepText(allBtns[b]);
+          if (/post|save|submit/i.test(txt)) return allBtns[b];
         }
       } catch (_) {}
     }
-    for (var idx2 = 0; idx2 <= 5; idx2++) {
-      try {
-        var allBtns2 = doc.querySelectorAll("#spl-form-element_" + idx2 + " spl-button");
-        for (var b2 = 0; b2 < allBtns2.length; b2++) {
-          if (!isVisible(allBtns2[b2], win)) continue;
-          if (allBtns2[b2].closest && allBtns2[b2].closest("spl-dropdown")) continue;
-          var txt2 = getDeepText(allBtns2[b2]);
-          if (/post|save|submit/i.test(txt2)) return allBtns2[b2];
-        }
-      } catch (_) {}
-    }
+    // Pass 2: deep shadow-DOM walk from notes section or full body
     var notesSection = getNotesSection(doc);
     var searchRoot = notesSection || doc.body || doc.documentElement;
     var deepBtns = findAllDeepButtons(searchRoot, win);
@@ -1587,6 +1596,16 @@
       if (deepBtns[i].closest && deepBtns[i].closest("spl-dropdown")) continue;
       var dtxt = getDeepText(deepBtns[i]);
       if (/^post$/i.test(dtxt)) return deepBtns[i];
+    }
+    // Pass 3: if notes section was too narrow, search full body
+    if (notesSection) {
+      var bodyBtns = findAllDeepButtons(doc.body || doc.documentElement, win);
+      for (var j = 0; j < bodyBtns.length; j++) {
+        if (isDisabledish(bodyBtns[j])) continue;
+        if (bodyBtns[j].closest && bodyBtns[j].closest("spl-dropdown")) continue;
+        var btxt = getDeepText(bodyBtns[j]);
+        if (/^post$/i.test(btxt)) return bodyBtns[j];
+      }
     }
     return null;
   }
@@ -1614,13 +1633,27 @@
       } catch (_) {
         el.value = value;
       }
-      try { el.dispatchEvent(new Event("input", { bubbles: true, composed: true })); } catch (_) {}
+      try { el.dispatchEvent(new InputEvent("beforeinput", { inputType: "insertText", data: value, bubbles: true, cancelable: true, composed: true })); } catch (_) {}
+      try { el.dispatchEvent(new InputEvent("input", { inputType: "insertText", data: value, bubbles: true, composed: true })); } catch (_) {}
       try { el.dispatchEvent(new Event("change", { bubbles: true, composed: true })); } catch (_) {}
       try { el.dispatchEvent(new KeyboardEvent("keyup", { bubbles: true, composed: true, key: "a" })); } catch (_) {}
     } else {
-      try { el.textContent = value; } catch (_) {}
-      try { el.innerHTML = value.replace(/\n/g, "<br>"); } catch (_) {}
-      try { el.dispatchEvent(new Event("input", { bubbles: true, composed: true })); } catch (_) {}
+      // Contenteditable: use execCommand to trigger framework bindings (Angular/React)
+      var ceInserted = false;
+      try {
+        el.focus();
+        var ownerDoc = el.ownerDocument || document;
+        var ownerWin = ownerDoc.defaultView || window;
+        var sel = ownerWin.getSelection();
+        if (sel) { sel.selectAllChildren(el); }
+        ceInserted = ownerDoc.execCommand("insertText", false, value);
+      } catch (_) {}
+      if (!ceInserted) {
+        try { el.textContent = value; } catch (_) {}
+        try { el.innerHTML = value.replace(/\n/g, "<br>"); } catch (_) {}
+      }
+      try { el.dispatchEvent(new InputEvent("input", { inputType: "insertText", data: value, bubbles: true, composed: true })); } catch (_) {}
+      try { el.dispatchEvent(new Event("change", { bubbles: true, composed: true })); } catch (_) {}
     }
   }
 
@@ -1710,23 +1743,34 @@
    */
   async function selectNoteToSelf(doc, win) {
     var splBtn = null;
-    for (var idx = 0; idx <= 5; idx++) {
+    // Find the note-type dropdown — the one whose text contains "note" (e.g. "Open note").
+    // There may be other dropdowns (e.g. "Using Publisher") in the same form element;
+    // querySelectorAll returns all of them so we can pick the right one.
+    var formEls = doc.querySelectorAll('[id^="spl-form-element_"]');
+    for (var fi = 0; fi < formEls.length && !splBtn; fi++) {
       try {
-        var dd = doc.querySelector("#spl-form-element_" + idx + " spl-dropdown");
-        if (dd && isVisible(dd, win)) {
-          splBtn = dd.querySelector("spl-button");
-          if (splBtn) break;
+        var dds = formEls[fi].querySelectorAll("spl-dropdown");
+        for (var di = 0; di < dds.length; di++) {
+          var dd = dds[di];
+          if (!isVisible(dd, win)) continue;
+          var ddText = getDeepText(dd);
+          if (/\bnote\b/i.test(ddText)) {
+            var btn = dd.querySelector("spl-button");
+            if (btn) { splBtn = btn; break; }
+          }
         }
       } catch (_) {}
     }
+    // Fallback: deep search entire body for note-type dropdown
     if (!splBtn) {
-      var notesRootForDd = getNotesSection(doc);
-      var ddSearchRoot = notesRootForDd || doc.body || doc.documentElement;
+      var ddSearchRoot = doc.body || doc.documentElement;
       var allDds = queryDeepSelectorAll(ddSearchRoot, win, "spl-dropdown");
-      for (var di = 0; di < allDds.length; di++) {
-        if (isVisible(allDds[di], win)) {
-          splBtn = allDds[di].querySelector("spl-button");
-          if (splBtn) break;
+      for (var di2 = 0; di2 < allDds.length; di2++) {
+        if (!isVisible(allDds[di2], win)) continue;
+        var ddText2 = getDeepText(allDds[di2]);
+        if (/\bnote\b/i.test(ddText2)) {
+          var btn2 = allDds[di2].querySelector("spl-button");
+          if (btn2) { splBtn = btn2; break; }
         }
       }
     }
@@ -1803,6 +1847,43 @@
     return ok;
   }
 
+  // Sets up a PerformanceObserver that watches for SR's note-save API call to complete.
+  // Call BEFORE clicking Post; then call .wait(maxMs) after confirmation polling to block
+  // navigation until the actual server round-trip finishes (not just the optimistic UI update).
+  // Falls back to a plain sleep when PerformanceObserver is unavailable.
+  function beginWatchForNoteSave(win) {
+    var resolve;
+    var p = new Promise(function(r) { resolve = r; });
+    var obs;
+    var broken = false;
+    try {
+      obs = new win.PerformanceObserver(function(list) {
+        var entries = list.getEntries();
+        for (var i = 0; i < entries.length; i++) {
+          var e = entries[i];
+          if ((e.initiatorType === "fetch" || e.initiatorType === "xmlhttprequest") &&
+              e.name && e.name.toLowerCase().indexOf("note") >= 0) {
+            try { obs.disconnect(); } catch (_) {}
+            resolve("api-done");
+            return;
+          }
+        }
+      });
+      obs.observe({ type: "resource", buffered: false });
+    } catch (_) {
+      broken = true;
+    }
+    return {
+      wait: function(maxMs) {
+        if (broken) return sleep(maxMs);
+        return Promise.race([
+          p,
+          sleep(maxMs).then(function() { try { obs.disconnect(); } catch (_) {} return "timeout"; }),
+        ]);
+      },
+    };
+  }
+
   async function postKeywordHitsToNotes(doc, win, hitLabels, hitCount, totalKeywords, log, notePrefix) {
     // Single combined walk to collect input + noteToSelf state + postBtn
     var ctx = findNotesContext(doc, win);
@@ -1835,6 +1916,7 @@
     if (!ctx.isNoteToSelf) {
       log.push({ ok: true, msg: "Notes: Note-to-self not active — selecting now" });
       await selectNoteToSelf(doc, win);
+      await sleep(500); // wait for SR to re-render the form after note-type selection
       ctx = findNotesContext(doc, win);
       if (ctx.input) input = ctx.input;  // textarea may have been remounted by SR
     }
@@ -1885,18 +1967,36 @@
       log.push({ ok: true, msg: "Notes: value confirmed in textarea — clicking Post" });
     }
 
-    var postBtn = ctx.postBtn;
-    if (!postBtn) {
-      for (var bw = 0; bw < 2000; bw += 200) {
-        postBtn = findNotesPostButton(doc, win);
-        if (postBtn) break;
-        await sleep(200);
+    // Poll until the Post button is both found AND enabled.
+    // SR's Post button starts disabled while the textarea is empty and becomes enabled
+    // only after its Angular binding detects the value change, which can lag several
+    // render cycles. Clicking a disabled spl-button's inner <button disabled> does nothing.
+    var postBtn = null;
+    for (var bw = 0; bw < 5000; bw += 300) {
+      var candidate = findNotesPostButton(doc, win);
+      if (candidate) {
+        var innerShadow = null;
+        try { if (candidate.shadowRoot) innerShadow = candidate.shadowRoot.querySelector("button"); } catch (_) {}
+        var outerOk = !isDisabledish(candidate);
+        var innerOk = innerShadow ? !innerShadow.disabled : true;
+        if (outerOk && innerOk) { postBtn = candidate; break; }
       }
+      await sleep(300);
+    }
+    if (!postBtn) {
+      // Last resort: use whatever button we found even if still disabled
+      postBtn = findNotesPostButton(doc, win);
     }
     if (!postBtn) {
       log.push({ ok: false, msg: "Notes: Post button not found — text entered but not submitted" });
       return false;
     }
+
+    // Start watching for SR's note-save API response BEFORE clicking Post so we don't
+    // miss a fast response. SR often does an optimistic UI update (clears textarea) before
+    // the server round-trip completes — we need to wait for the actual API call to finish
+    // so the browser doesn't cancel the in-flight XHR when we navigate to the next profile.
+    var noteSaveWatcher = beginWatchForNoteSave(win);
 
     // Click Post exactly once — never retry. Retrying risks posting blank notes when SR
     // is slow to clear the textarea after a successful submission.
@@ -1918,14 +2018,16 @@
     // If textarea didn't clear within 4.5 s, assume the click landed anyway —
     // SR sometimes keeps text briefly. Returning false here would cause the
     // caller to log note✗ and potentially requeue, which is worse than a
-    // missed confirmation.
+    // missed confirmation. This is logged as "UNCONFIRMED" so it appears in
+    // diagLog and the user can spot it in the popup.
     if (!confirmed) {
-      log.push({ ok: true, msg: "Notes: Post clicked, textarea did not clear in 4.5s — assuming submitted" });
-      await sleep(800);
+      log.push({ ok: true, msg: "Notes: Post clicked — UNCONFIRMED (textarea did not clear in 4.5s, may not have saved if page closed too soon)" });
+      await noteSaveWatcher.wait(4000);
       return true;
     }
 
-    await sleep(800);
+    // Wait for the actual SR API response (not just the optimistic UI clear).
+    await noteSaveWatcher.wait(3000);
     log.push({ ok: true, msg: "Notes: confirmed posted (" + hitCount + " matches)" });
     return true;
   }
@@ -2022,10 +2124,14 @@
       }
     }
 
-    if (allText.length < 200) {
-      var fullPage = "";
-      try { fullPage = getFullPageText(doc); } catch (_) {}
-      if (fullPage.length > allText.length) allText = fullPage;
+    // Always run a full-page shadow-DOM scan — replicates Ctrl+F behavior by walking every
+    // text node in every shadow root unconditionally. Class-selector extraction misses SR
+    // custom elements (e.g. <sr-work-experience>) that carry no class attribute.
+    var fullPage = "";
+    try { fullPage = getFullPageText(doc); } catch (_) {}
+    if (fullPage.length > allText.length) {
+      log.push({ ok: true, msg: "Full-page scan: " + fullPage.length + " chars (targeted: " + allText.length + " chars) — using full-page" });
+      allText = fullPage;
     }
 
     allText = normalizeForKw(allText);
@@ -2037,7 +2143,8 @@
 
     if (textLen < 50) {
       log.push({ ok: false, msg: "Very little text found on page — resume may not have loaded." });
-      return { log: log, moved: false, skipped: true, matchedKeywords: [], hitCount: 0 };
+      return { log: log, moved: false, skipped: true, matchedKeywords: [], hitCount: 0,
+               textStats: { headerLen: (headerText||"").length, resumeLen: 0, profileLen: 0, totalLen: 0 } };
     }
 
     var result = findKeywordHits(allText, keywords);
@@ -2067,7 +2174,10 @@
       }
     }
 
-    return { log: log, moved: false, skipped: false, matchedKeywords: hitLabels, hitCount: hitCount, notesPosted: notesPosted, notesFailReason: notesFailReason };
+    return { log: log, moved: false, skipped: false, matchedKeywords: hitLabels, hitCount: hitCount,
+             notesPosted: notesPosted, notesFailReason: notesFailReason,
+             textStats: { headerLen: (headerText||"").length, resumeLen: (resumeText||"").length,
+                          profileLen: (profileText||"").length, totalLen: textLen } };
   }
 
   async function runBooleanTriageWithDoc(doc, win, config, options, log) {
@@ -2164,11 +2274,11 @@
       }
     }
 
-    if (allText.length < 200) {
-      log.push({ ok: true, msg: "Low text from targeted selectors (" + allText.length + " chars) — falling back to full page text" });
-      var fullPage = "";
-      try { fullPage = getFullPageText(doc); } catch (_) {}
-      if (fullPage.length > allText.length) allText = fullPage;
+    var fullPage = "";
+    try { fullPage = getFullPageText(doc); } catch (_) {}
+    if (fullPage.length > allText.length) {
+      log.push({ ok: true, msg: "Full-page scan: " + fullPage.length + " chars (targeted: " + allText.length + " chars) — using full-page" });
+      allText = fullPage;
     }
 
     allText = normalizeForKw(allText);
@@ -2180,7 +2290,8 @@
 
     if (textLen < 50) {
       log.push({ ok: false, msg: "Very little text found on page — resume may not have loaded." });
-      return { log: log, moved: false, skipped: true, matchedKeywords: [], hitCount: 0 };
+      return { log: log, moved: false, skipped: true, matchedKeywords: [], hitCount: 0,
+               textStats: { headerLen: (headerText||"").length, resumeLen: 0, profileLen: 0, totalLen: 0 } };
     }
 
     var scanLowerToCanons = {};
@@ -2271,6 +2382,8 @@
       notesPosted: notesPosted,
       notesFailReason: notesFailReason,
       booleanPass: booleanPass,
+      textStats: { headerLen: (headerText||"").length, resumeLen: (resumeText||"").length,
+                   profileLen: profileText.length, totalLen: textLen },
     };
   }
 

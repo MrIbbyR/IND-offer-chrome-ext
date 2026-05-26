@@ -620,56 +620,104 @@ const KW_TYPO_HINTS = (typeof KEYWORD_TYPO_ALIASES !== "undefined") ? KEYWORD_TY
 };
 
 const KW_RELATED = {
-  "python": ["pandas", "numpy", "scipy", "flask", "django", "fastapi", "jupyter"],
-  "pytorch": ["tensorflow", "keras", "deep learning", "neural networks", "cuda", "torchvision"],
-  "tensorflow": ["pytorch", "keras", "deep learning", "neural networks", "tflite"],
-  "keras": ["tensorflow", "pytorch", "deep learning", "neural networks"],
+  // ── IAM / Identity & Access Management ──
+  // These are the most likely keywords a TA recruiter in the identity space will type.
+  // The suggestions help surface related tools/terms they might forget to add.
+  "ping":            ["Ping Identity", "PingFederate", "Ping One", "Okta", "SailPoint", "ForgeRock", "CIAM", "SSO", "IAM"],
+  "pingidentity":    ["PingFederate", "Ping One", "SAML", "OAuth", "OIDC", "SSO", "IAM", "Okta"],
+  "ping identity":   ["PingFederate", "Ping One", "IAM", "SSO", "SAML", "Okta"],
+  "sailpoint":       ["SailPoint IIQ", "IdentityNow", "IAM", "IGA", "identity governance", "Saviynt", "One Identity"],
+  "sail point":      ["SailPoint", "IGA", "identity governance", "IAM"],
+  "okta":            ["Okta Workforce", "Auth0", "Azure AD", "IAM", "SSO", "CIAM", "MFA"],
+  "ciam":            ["Customer Identity", "Auth0", "Okta", "Ping Identity", "ForgeRock", "OAuth", "OIDC"],
+  "iam":             ["Okta", "SailPoint", "CyberArk", "Ping Identity", "ForgeRock", "LDAP", "Active Directory", "IGA", "PAM"],
+  "sso":             ["Single Sign-On", "SAML", "OAuth", "OIDC", "Okta", "Azure AD", "IAM", "Ping Identity"],
+  "mfa":             ["Multi-Factor Authentication", "2FA", "Okta Verify", "Duo", "identity", "IAM"],
+  "saml":            ["OIDC", "OAuth", "SSO", "federation", "identity provider", "IAM", "PingFederate"],
+  "oauth":           ["OIDC", "SAML", "OAuth 2.0", "API security", "JWT", "SSO", "IAM"],
+  "oidc":            ["OpenID Connect", "OAuth", "SAML", "SSO", "identity provider", "IAM"],
+  "ldap":            ["Active Directory", "OpenLDAP", "IAM", "directory services", "ADFS"],
+  "active directory": ["LDAP", "Azure AD", "ADFS", "Entra ID", "group policy", "SSO"],
+  "azure ad":        ["Entra ID", "Active Directory", "ADFS", "SSO", "Okta", "IAM"],
+  "entra":           ["Entra ID", "Azure AD", "Active Directory", "ADFS", "SSO", "Microsoft Identity"],
+  "cyberark":        ["PAM", "privileged access", "Delinea", "BeyondTrust", "Thycotic", "vault"],
+  "forgerock":       ["identity platform", "AM", "IDM", "Ping Identity", "IAM", "CIAM"],
+  "pam":             ["Privileged Access Management", "CyberArk", "BeyondTrust", "Delinea", "Thycotic"],
+  "iga":             ["identity governance", "SailPoint", "Saviynt", "One Identity", "IAM"],
+  "saviynt":         ["IGA", "SailPoint", "identity governance", "IAM", "cloud security"],
+  "beyondtrust":     ["PAM", "CyberArk", "privileged access", "Delinea", "IAM"],
+  "delinea":         ["PAM", "CyberArk", "BeyondTrust", "Thycotic", "privileged access"],
+  "auth0":           ["Okta", "CIAM", "IAM", "OAuth", "OIDC", "identity platform"],
+
+  // ── Cloud / Kubernetes ──
+  "gke":             ["Google Kubernetes Engine", "GCP", "Google Cloud", "EKS", "AKS", "Kubernetes", "K8s"],
+  "eks":             ["Amazon Elastic Kubernetes Service", "AWS", "Kubernetes", "ECS", "GKE", "AKS", "K8s"],
+  "aks":             ["Azure Kubernetes Service", "Azure", "Kubernetes", "EKS", "GKE", "K8s"],
+  "ec2":             ["AWS", "virtual machine", "compute", "S3", "EKS", "cloud"],
+  "s3":              ["AWS", "object storage", "cloud storage", "GCS", "Azure Blob"],
+  "lambda":          ["serverless", "AWS", "FaaS", "cloud functions", "Azure Functions", "GCP"],
+
+  // ── ML / AI ──
+  "python":          ["pandas", "numpy", "scipy", "flask", "django", "fastapi", "jupyter"],
+  "pytorch":         ["tensorflow", "keras", "deep learning", "neural networks", "cuda", "torchvision"],
+  "tensorflow":      ["pytorch", "keras", "deep learning", "neural networks", "tflite"],
+  "keras":           ["tensorflow", "pytorch", "deep learning", "neural networks"],
   "machine learning": ["deep learning", "scikit-learn", "xgboost", "random forest", "NLP", "computer vision"],
-  "deep learning": ["pytorch", "tensorflow", "keras", "CNN", "RNN", "transformer"],
-  "nlp": ["spacy", "BERT", "GPT", "huggingface", "transformers", "text mining", "sentiment analysis"],
-  "aws": ["EC2", "S3", "Lambda", "CloudFormation", "SageMaker", "EKS", "cloud"],
-  "azure": ["Azure DevOps", "AKS", "Azure Functions", "cloud", "Microsoft"],
-  "gcp": ["BigQuery", "GKE", "Cloud Functions", "Vertex AI", "cloud"],
-  "cloud": ["AWS", "Azure", "GCP", "Kubernetes", "Docker", "Terraform"],
-  "docker": ["Kubernetes", "container", "Docker Compose", "Podman", "CI/CD"],
-  "kubernetes": ["Docker", "Helm", "EKS", "AKS", "GKE", "K8s"],
-  "jenkins": ["GitHub Actions", "GitLab CI", "CI/CD", "CircleCI", "Terraform"],
-  "github actions": ["Jenkins", "GitLab CI", "CI/CD", "CircleCI"],
-  "gitlab": ["GitLab CI", "GitHub Actions", "Jenkins", "CI/CD", "Git"],
-  "git": ["GitHub", "GitLab", "Bitbucket", "version control"],
-  "ci/cd": ["Jenkins", "GitHub Actions", "GitLab CI", "ArgoCD", "Terraform"],
-  "terraform": ["Ansible", "CloudFormation", "Pulumi", "IaC", "infrastructure"],
-  "react": ["Next.js", "Redux", "TypeScript", "JavaScript", "Vue", "Angular"],
-  "angular": ["TypeScript", "RxJS", "JavaScript", "React", "Vue"],
-  "vue": ["Nuxt.js", "Vuex", "JavaScript", "React", "Angular"],
-  "javascript": ["TypeScript", "Node.js", "React", "Vue", "Angular"],
-  "typescript": ["JavaScript", "Node.js", "React", "Angular"],
-  "node.js": ["Express", "NestJS", "JavaScript", "TypeScript", "npm"],
-  "java": ["Spring Boot", "Maven", "Gradle", "Hibernate", "JUnit", "microservices"],
-  "spring boot": ["Java", "microservices", "REST API", "Hibernate", "Maven"],
-  "sql": ["PostgreSQL", "MySQL", "SQL Server", "database", "NoSQL"],
-  "postgresql": ["SQL", "database", "MySQL", "pgAdmin"],
-  "mongodb": ["NoSQL", "Mongoose", "database", "Redis"],
-  "redis": ["caching", "MongoDB", "Memcached", "database"],
-  "elasticsearch": ["Kibana", "Logstash", "ELK", "search", "Solr"],
-  "kafka": ["event streaming", "RabbitMQ", "Spark", "data pipeline"],
-  "spark": ["Hadoop", "data engineering", "PySpark", "Kafka", "Databricks"],
-  "hadoop": ["Spark", "HDFS", "MapReduce", "data engineering", "Hive"],
-  "r&d": ["research", "innovation", "patents", "product development"],
-  "iso 45001": ["ISO 9001", "ISO 14001", "OHSMS", "NEBOSH", "safety management"],
-  "iso 9001": ["ISO 45001", "ISO 14001", "quality management", "QMS"],
-  "nebosh": ["IOSH", "ISO 45001", "safety", "OSHA", "risk assessment"],
-  "phd": ["research", "thesis", "publications", "doctorate"],
-  "agile": ["Scrum", "Kanban", "JIRA", "sprint", "product owner"],
-  "scrum": ["Agile", "Kanban", "JIRA", "sprint planning"],
-  "jira": ["Agile", "Scrum", "Confluence", "Kanban", "project management"],
-  "figma": ["Sketch", "Adobe XD", "UI/UX", "design", "prototyping"],
-  "data science": ["machine learning", "statistics", "Python", "R", "pandas", "visualization"],
-  "devops": ["CI/CD", "Docker", "Kubernetes", "Terraform", "Jenkins", "monitoring"],
-  "cybersecurity": ["penetration testing", "SIEM", "SOC", "firewall", "encryption"],
-  "golang": ["Go", "microservices", "concurrency", "gRPC"],
-  "rust": ["systems programming", "WebAssembly", "memory safety"],
-  "c++": ["C", "systems programming", "embedded", "Qt", "game development"],
+  "deep learning":   ["pytorch", "tensorflow", "keras", "CNN", "RNN", "transformer"],
+  "nlp":             ["spacy", "BERT", "GPT", "huggingface", "transformers", "text mining", "sentiment analysis"],
+
+  // ── Cloud platforms ──
+  "aws":             ["EC2", "S3", "Lambda", "CloudFormation", "SageMaker", "EKS", "cloud"],
+  "azure":           ["Azure DevOps", "AKS", "Azure Functions", "cloud", "Microsoft", "Entra"],
+  "gcp":             ["BigQuery", "GKE", "Cloud Functions", "Vertex AI", "cloud"],
+  "cloud":           ["AWS", "Azure", "GCP", "Kubernetes", "Docker", "Terraform"],
+  "docker":          ["Kubernetes", "container", "Docker Compose", "Podman", "CI/CD"],
+  "kubernetes":      ["Docker", "Helm", "EKS", "AKS", "GKE", "K8s"],
+
+  // ── DevOps / CI-CD ──
+  "jenkins":         ["GitHub Actions", "GitLab CI", "CI/CD", "CircleCI", "Terraform"],
+  "github actions":  ["Jenkins", "GitLab CI", "CI/CD", "CircleCI"],
+  "gitlab":          ["GitLab CI", "GitHub Actions", "Jenkins", "CI/CD", "Git"],
+  "git":             ["GitHub", "GitLab", "Bitbucket", "version control"],
+  "ci/cd":           ["Jenkins", "GitHub Actions", "GitLab CI", "ArgoCD", "Terraform"],
+  "terraform":       ["Ansible", "CloudFormation", "Pulumi", "IaC", "infrastructure"],
+
+  // ── Frontend ──
+  "react":           ["Next.js", "Redux", "TypeScript", "JavaScript", "Vue", "Angular"],
+  "angular":         ["TypeScript", "RxJS", "JavaScript", "React", "Vue"],
+  "vue":             ["Nuxt.js", "Vuex", "JavaScript", "React", "Angular"],
+  "javascript":      ["TypeScript", "Node.js", "React", "Vue", "Angular"],
+  "typescript":      ["JavaScript", "Node.js", "React", "Angular"],
+  "node.js":         ["Express", "NestJS", "JavaScript", "TypeScript", "npm"],
+
+  // ── Backend / Data ──
+  "java":            ["Spring Boot", "Maven", "Gradle", "Hibernate", "JUnit", "microservices"],
+  "spring boot":     ["Java", "microservices", "REST API", "Hibernate", "Maven"],
+  "sql":             ["PostgreSQL", "MySQL", "SQL Server", "database", "NoSQL"],
+  "postgresql":      ["SQL", "database", "MySQL", "pgAdmin"],
+  "mongodb":         ["NoSQL", "Mongoose", "database", "Redis"],
+  "redis":           ["caching", "MongoDB", "Memcached", "database"],
+  "elasticsearch":   ["Kibana", "Logstash", "ELK", "search", "Solr"],
+  "kafka":           ["event streaming", "RabbitMQ", "Spark", "data pipeline"],
+  "spark":           ["Hadoop", "data engineering", "PySpark", "Kafka", "Databricks"],
+  "hadoop":          ["Spark", "HDFS", "MapReduce", "data engineering", "Hive"],
+
+  // ── Domain / Standards ──
+  "r&d":             ["research", "innovation", "patents", "product development"],
+  "iso 45001":       ["ISO 9001", "ISO 14001", "OHSMS", "NEBOSH", "safety management"],
+  "iso 9001":        ["ISO 45001", "ISO 14001", "quality management", "QMS"],
+  "nebosh":          ["IOSH", "ISO 45001", "safety", "OSHA", "risk assessment"],
+  "phd":             ["research", "thesis", "publications", "doctorate"],
+  "agile":           ["Scrum", "Kanban", "JIRA", "sprint", "product owner"],
+  "scrum":           ["Agile", "Kanban", "JIRA", "sprint planning"],
+  "jira":            ["Agile", "Scrum", "Confluence", "Kanban", "project management"],
+  "figma":           ["Sketch", "Adobe XD", "UI/UX", "design", "prototyping"],
+  "data science":    ["machine learning", "statistics", "Python", "R", "pandas", "visualization"],
+  "devops":          ["CI/CD", "Docker", "Kubernetes", "Terraform", "Jenkins", "monitoring"],
+  "cybersecurity":   ["penetration testing", "SIEM", "SOC", "firewall", "encryption"],
+  "golang":          ["Go", "microservices", "concurrency", "gRPC"],
+  "rust":            ["systems programming", "WebAssembly", "memory safety"],
+  "c++":             ["C", "systems programming", "embedded", "Qt", "game development"],
 };
 
 const kwSuggestionsBox = document.getElementById("kwSuggestionsBox");
@@ -937,6 +985,22 @@ function kwLog(icon, msg) {
   kwLogEl.scrollTop = kwLogEl.scrollHeight;
 }
 
+/** Indented diagnostic sub-line shown under a failed result entry. */
+function kwLogSub(msg) {
+  const line = document.createElement("div");
+  line.className = "log-line sub";
+  const iconSpan = document.createElement("span");
+  iconSpan.className = "sub-icon";
+  iconSpan.textContent = "↳";
+  const msgSpan = document.createElement("span");
+  msgSpan.className = "msg";
+  msgSpan.textContent = msg;
+  line.appendChild(iconSpan);
+  line.appendChild(msgSpan);
+  kwLogEl.appendChild(line);
+  kwLogEl.scrollTop = kwLogEl.scrollHeight;
+}
+
 function setKwStatus(state, label) {
   kwStatusDot.className = "status-dot " + state;
   kwStatusLabel.textContent = label;
@@ -1087,30 +1151,34 @@ if (btnKwLastRun) {
       const skipped   = results.filter(r => r.skipped).length;
 
       kwLog("✓", `Last run: ${results.length} profiles @ ${time}`);
+      const notesFailed = results.filter(r => r.hitCount > 0 && !r.notesPosted).length;
       kwLog(withHits > 0 ? "✓" : "✗",
         `${withHits} matched  ·  ${withNotes} notes posted  ·  ${withMove} moved fwd  ·  ${skipped} skipped`);
+      if (notesFailed > 0) {
+        kwLog("✗", `${notesFailed} note${notesFailed > 1 ? "s" : ""} failed to post — see ↳ details below`);
+      }
 
       for (const r of results.slice(0, 40)) {
         const seg = (r.url || "").split("/").slice(-2, -1)[0] || r.url.slice(-20);
         const kws = (r.matchedKeywords || []).slice(0, 3).join(", ") || "";
         const boolTag = (r.booleanPass != null) ? (r.booleanPass ? " PASS" : " FAIL") : "";
+        // For 0-hit profiles, show text-source breakdown so extraction failures are obvious.
+        // e.g. "0 hits [rsm:0 ttl:312]" means resume was empty but header/page text was found.
+        const textHint = (r.hitCount === 0 && r.textStats)
+          ? ` [rsm:${r.textStats.resumeLen} ttl:${r.textStats.totalLen}]` : "";
         const tags = [
           r.skipped ? "skip" : "",
-          r.hitCount > 0 ? r.hitCount + " hits" : "0 hits",
+          r.hitCount > 0 ? r.hitCount + " hits" : "0 hits" + textHint,
           kws,
           boolTag,
           r.notesPosted ? "note✓" : (r.hitCount > 0 ? "note✗" + (r.notesFailReason ? " [" + r.notesFailReason.replace(/\s*—.*/, "").trim().slice(0, 30) + "]" : "") : ""),
           r.moved ? "fwd✓" : "",
         ].filter(Boolean).join(" · ");
         kwLog(r.hitCount > 0 ? "✓" : "✗", `[${seg}] ${tags}`);
-      }
-
-      // Show errors from the full log
-      const fullLog = run.log || [];
-      const errors = fullLog.filter(e => !e.ok && e.msg);
-      if (errors.length) {
-        kwLog("✗", `── ${errors.length} error(s) in full log ──`);
-        for (const e of errors.slice(0, 8)) kwLog("✗", e.msg);
+        // Show per-profile diagnostic log for note failures and 0-hit profiles.
+        if (r.diagLog && r.diagLog.length) {
+          for (const entry of r.diagLog) kwLogSub(entry);
+        }
       }
 
       setKwStatus("salary-done", `Last run: ${results.length} profiles`);

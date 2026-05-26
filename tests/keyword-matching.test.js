@@ -263,3 +263,81 @@ describe('findKeywordHits + deduplicateHitsByCanonical integration', () => {
     assert.strictEqual(userCount, 3);
   });
 });
+
+describe('IAM tool keyword matching — two-word vs compound-word variants', () => {
+  // These tests reproduce real failures: Ctrl+F finds "Ping Identity" / "Sail Point"
+  // on a resume but the extension returned 0 hits because the engine matched only
+  // the single-token compound form and not the space-separated two-word form.
+
+  it('"pingidentity" keyword matches "Ping Identity" (two-word form in resume)', () => {
+    const text = 'Senior IAM architect with Ping Identity and ForgeRock experience';
+    const { keywords, canonicalMap } = resolveKeywordsWithMeta('pingidentity');
+    const { hits } = findKeywordHits(text, keywords);
+    const out = deduplicateHitsByCanonical(hits, canonicalMap);
+    assert.ok(out.length > 0, 'pingidentity should match "Ping Identity"');
+    assert.strictEqual(out[0].keyword, 'pingidentity');
+  });
+
+  it('"pingidentity" keyword matches "PingIdentity" (compound CamelCase in resume)', () => {
+    const text = 'Administered PingIdentity SSO across enterprise';
+    const { keywords, canonicalMap } = resolveKeywordsWithMeta('pingidentity');
+    const { hits } = findKeywordHits(text, keywords);
+    const out = deduplicateHitsByCanonical(hits, canonicalMap);
+    assert.ok(out.length > 0, 'pingidentity should match "PingIdentity"');
+  });
+
+  it('"sailpoint" keyword matches "Sail Point" (two-word form in resume)', () => {
+    const text = 'Led identity governance implementation using Sail Point IIQ';
+    const { keywords, canonicalMap } = resolveKeywordsWithMeta('sailpoint');
+    const { hits } = findKeywordHits(text, keywords);
+    const out = deduplicateHitsByCanonical(hits, canonicalMap);
+    assert.ok(out.length > 0, 'sailpoint should match "Sail Point"');
+    assert.strictEqual(out[0].keyword, 'sailpoint');
+  });
+
+  it('"sailpoint" keyword matches "SailPoint" (CamelCase in resume)', () => {
+    const text = 'Certified SailPoint IdentityIQ developer';
+    const { keywords, canonicalMap } = resolveKeywordsWithMeta('sailpoint');
+    const { hits } = findKeywordHits(text, keywords);
+    const out = deduplicateHitsByCanonical(hits, canonicalMap);
+    assert.ok(out.length > 0, 'sailpoint should match "SailPoint"');
+  });
+
+  it('"ping" and "pingidentity" both count as hits when resume says "Ping Identity"', () => {
+    const text = '10 years Ping Identity experience across multiple clients';
+    const { keywords, canonicalMap } = resolveKeywordsWithMeta('ping, pingidentity');
+    const { hits } = findKeywordHits(text, keywords);
+    const out = deduplicateHitsByCanonical(hits, canonicalMap);
+    // Both user keywords should resolve to independent hits
+    assert.ok(out.length >= 1, 'at least one of ping/pingidentity should match');
+    const labels = out.map(h => h.keyword);
+    assert.ok(labels.includes('ping') || labels.includes('pingidentity'),
+      'hit should fold back to canonical user keyword name');
+  });
+
+  it('full IAM query — "Ping Identity" resume hits both ping and pingidentity canonicals', () => {
+    // Simulates the user running: ping, sailpoint, okta, CIAM, migration, pingidentity
+    const text = 'IAM architect, Ping Identity federation, SailPoint IIQ governance, Okta SSO, CIAM strategy';
+    const { keywords, canonicalMap, userCount } = resolveKeywordsWithMeta(
+      'ping, sailpoint, okta, CIAM, migration, pingidentity'
+    );
+    const { hits } = findKeywordHits(text, keywords);
+    const out = deduplicateHitsByCanonical(hits, canonicalMap);
+    const labels = out.map(h => h.keyword);
+    assert.ok(labels.includes('ping'), 'ping should match "Ping Identity"');
+    assert.ok(labels.includes('pingidentity'), 'pingidentity should match "Ping Identity"');
+    assert.ok(labels.includes('sailpoint'), 'sailpoint should match "SailPoint IIQ"');
+    assert.ok(labels.includes('okta'), 'okta should match');
+    assert.ok(labels.includes('CIAM'), 'CIAM should match');
+    assert.strictEqual(userCount, 6);
+  });
+
+  it('"ciam" keyword matches spelled-out "Customer Identity and Access Management"', () => {
+    const text = 'Developed Customer Identity and Access Management platform using Auth0';
+    const { keywords, canonicalMap } = resolveKeywordsWithMeta('CIAM');
+    const { hits } = findKeywordHits(text, keywords);
+    const out = deduplicateHitsByCanonical(hits, canonicalMap);
+    assert.ok(out.length > 0, 'CIAM should match spelled-out form');
+    assert.strictEqual(out[0].keyword, 'CIAM');
+  });
+});

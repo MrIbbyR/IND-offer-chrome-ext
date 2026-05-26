@@ -62,6 +62,24 @@ function showNotification(id, title, message) {
 // ── Parallel queue state ──
 let parallelQueue = null; // { urls: [], config: {}, workers: N, returnUrl, results: [], active: Map<tabId, url>, stopped: bool }
 
+// Persist remaining URLs + results so the queue survives MV3 service-worker restarts.
+function persistQueueUrls() {
+  if (!parallelQueue) return;
+  chrome.storage.local.set({
+    srParallelQueueUrls: parallelQueue.urls.slice(),
+    srParallelQueueResults: parallelQueue.results.slice(),
+    srParallelQueueReturnUrl: parallelQueue.returnUrl,
+    srParallelQueueWorkers: parallelQueue.workers,
+  }).catch(() => {});
+}
+
+function clearPersistedQueue() {
+  chrome.storage.local.remove([
+    "srParallelQueueUrls", "srParallelQueueResults",
+    "srParallelQueueReturnUrl", "srParallelQueueWorkers",
+  ]).catch(() => {});
+}
+
 function resetParallelQueue() {
   if (parallelQueue && parallelQueue.active) {
     for (const tabId of parallelQueue.active.keys()) {
@@ -71,6 +89,7 @@ function resetParallelQueue() {
     }
   }
   parallelQueue = null;
+  clearPersistedQueue();
 }
 
 async function launchNextWorker() {
@@ -82,11 +101,12 @@ async function launchNextWorker() {
   if (parallelQueue.active.size >= parallelQueue.workers) return;
 
   const url = parallelQueue.urls.shift();
+  persistQueueUrls();
   try {
     const tab = await chrome.tabs.create({ url: url, active: false });
     parallelQueue.active.set(tab.id, url);
   } catch (e) {
-    if (parallelQueue) parallelQueue.urls.unshift(url);
+    if (parallelQueue) { parallelQueue.urls.unshift(url); persistQueueUrls(); }
     setTimeout(launchNextWorker, jitter(1600));
   }
 }
@@ -97,6 +117,7 @@ function finishParallelQueue() {
   const matched = results.filter(r => r.hitCount > 0).length;
   const returnUrl = parallelQueue.returnUrl || "";
 
+  clearPersistedQueue();
   chrome.storage.local
     .set({
       keywordTriageLastRun: {
@@ -116,6 +137,51 @@ function finishParallelQueue() {
   playBeepInSRTab(returnUrl);
 
   parallelQueue = null;
+}
+
+// ── Worker done handler (extracted so it can be called after async queue restore) ──
+function handleWorkerDone(message, sender, sendResponse) {
+  if (!parallelQueue) { sendResponse({ next: false }); return; }
+  const tabId = sender.tab && sender.tab.id;
+  const url = (tabId && parallelQueue.active.get(tabId)) || "";
+
+  parallelQueue.results.push({
+    url: url,
+    hitCount: message.hitCount || 0,
+    matchedKeywords: message.matchedKeywords || [],
+    booleanPass: message.booleanPass,
+    notesPosted: !!message.notesPosted,
+    notesFailReason: message.notesFailReason || "",
+    textStats: message.textStats || null,
+    diagLog: message.diagLog || undefined,
+  });
+
+  if (tabId) parallelQueue.active.delete(tabId);
+
+  if (parallelQueue.stopped || !parallelQueue.urls.length) {
+    if (tabId) chrome.tabs.remove(tabId).catch(() => {});
+    persistQueueUrls();
+    if (parallelQueue.active.size === 0) finishParallelQueue();
+    sendResponse({ next: false });
+    return;
+  }
+
+  const nextUrl = parallelQueue.urls.shift();
+  parallelQueue.active.set(tabId, nextUrl);
+  persistQueueUrls();
+  sendResponse({ next: true, url: nextUrl });
+  setTimeout(() => {
+    if (tabId) {
+      chrome.tabs.update(tabId, { url: nextUrl }).catch(() => {
+        if (parallelQueue) {
+          parallelQueue.active.delete(tabId);
+          parallelQueue.urls.unshift(nextUrl);
+          persistQueueUrls();
+          launchNextWorker();
+        }
+      });
+    }
+  }, message.notesPosted ? jitter(2400) : jitter(1600));
 }
 
 // ── Message handler ──
@@ -179,44 +245,32 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   }
 
   if (message.type === "srWorkerDone") {
+    // If the service worker was killed and restarted, parallelQueue is null.
+    // Try to restore from persisted storage so the run can continue.
     if (!parallelQueue) {
-      sendResponse({ next: false });
-      return true;
-    }
-    const tabId = sender.tab && sender.tab.id;
-    const url = (tabId && parallelQueue.active.get(tabId)) || "";
-
-    parallelQueue.results.push({
-      url: url,
-      hitCount: message.hitCount || 0,
-      matchedKeywords: message.matchedKeywords || [],
-      booleanPass: message.booleanPass,
-      notesPosted: !!message.notesPosted,
-    });
-
-    if (tabId) parallelQueue.active.delete(tabId);
-
-    if (parallelQueue.stopped || !parallelQueue.urls.length) {
-      if (tabId) chrome.tabs.remove(tabId).catch(() => {});
-      if (parallelQueue.active.size === 0) finishParallelQueue();
-      sendResponse({ next: false });
-      return true;
-    }
-
-    const nextUrl = parallelQueue.urls.shift();
-    parallelQueue.active.set(tabId, nextUrl);
-    sendResponse({ next: true, url: nextUrl });
-    setTimeout(() => {
-      if (tabId) {
-        chrome.tabs.update(tabId, { url: nextUrl }).catch(() => {
-          if (parallelQueue) {
-            parallelQueue.active.delete(tabId);
-            parallelQueue.urls.unshift(nextUrl);
-            launchNextWorker();
+      chrome.storage.local.get(
+        ["srParallelWorkerActive", "srParallelWorkerConfig", "srParallelQueueUrls",
+         "srParallelQueueResults", "srParallelQueueReturnUrl", "srParallelQueueWorkers"],
+        (stored) => {
+          if (chrome.runtime.lastError || !stored.srParallelWorkerActive || !stored.srParallelQueueUrls) {
+            sendResponse({ next: false });
+            return;
           }
-        });
-      }
-    }, message.notesPosted ? jitter(2400) : jitter(1600));
+          parallelQueue = {
+            urls: stored.srParallelQueueUrls,
+            config: stored.srParallelWorkerConfig || {},
+            workers: stored.srParallelQueueWorkers || 2,
+            returnUrl: stored.srParallelQueueReturnUrl || "",
+            results: stored.srParallelQueueResults || [],
+            active: new Map(),
+            stopped: false,
+          };
+          handleWorkerDone(message, sender, sendResponse);
+        }
+      );
+      return true;
+    }
+    handleWorkerDone(message, sender, sendResponse);
     return true;
   }
 

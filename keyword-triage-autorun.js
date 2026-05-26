@@ -265,6 +265,17 @@
       };
     }
 
+    var workerNotesFailed = (result.hitCount || 0) > 0 && !result.notesPosted;
+    var workerNoHits = (result.hitCount || 0) === 0;
+    var workerDiagLog = [];
+    if (workerNotesFailed || workerNoHits) {
+      workerDiagLog = (result.log || []).filter(function (e) {
+        if (!e.ok) return true;
+        var m = e.msg || "";
+        return /^(Resume:|Total text:|Shadow-DOM|Extended scan|Retry recovered|Notes:\s*(confirmed|Post clicked|UNCONFIRMED|value confirmed))/i.test(m);
+      }).map(function (e) { return (e.ok ? "· " : "✗ ") + (e.msg || ""); }).filter(Boolean).slice(0, 12);
+    }
+
     try {
       var resp2 = await new Promise(function (resolve) {
         chrome.runtime.sendMessage(
@@ -274,6 +285,9 @@
             matchedKeywords: result.matchedKeywords || [],
             booleanPass: result.booleanPass,
             notesPosted: !!result.notesPosted,
+            notesFailReason: result.notesFailReason || "",
+            textStats: result.textStats || null,
+            diagLog: workerDiagLog.length ? workerDiagLog : undefined,
           },
           function (r) {
             if (chrome.runtime.lastError) resolve(null);
@@ -333,7 +347,15 @@
         await runClickListStep(state);
         var arrived = await waitUntilProfileAfterListClick(queueReadyCap);
         if (!arrived) {
-          showToast("Keyword search: profile did not open (waited " + Math.round(queueReadyCap / 1000) + "s).");
+          showToast("Keyword search: profile did not open — skipping candidate.");
+          state.results = state.results || [];
+          state.results.push({ url: state.returnUrl, clickIndex: state.clickIndex, skipped: true, error: "click_navigate_timeout" });
+          var nextAfterMiss = state.clickIndex + 1;
+          if (nextAfterMiss >= state.total) { finishQueue(state, state.results.length); return; }
+          state.clickIndex = nextAfterMiss;
+          try { sessionStorage.setItem(KEY, JSON.stringify(state)); } catch (_) {}
+          await sleepJitter(1000);
+          window.location.replace(state.returnUrl);
           return;
         }
       }
@@ -406,6 +428,22 @@
 
       state.log = (state.log || []).concat(result.log || []);
       state.results = state.results || [];
+      // Build a compact diagnostic log for failures. Only stored when notes failed or
+      // 0 hits were found — no storage cost on successful profiles.
+      // Contains: all error entries + key stat/confirmation lines (max 12).
+      var notesFailed = result.hitCount > 0 && !result.notesPosted;
+      var noHits = result.hitCount === 0 && !result.skipped;
+      var diagLog = [];
+      if (notesFailed || noHits) {
+        diagLog = (result.log || []).filter(function(e) {
+          if (!e.ok) return true;
+          var m = e.msg || "";
+          return /^(Resume:|Total text:|Shadow-DOM|Extended scan|Retry recovered|Notes:\s*(confirmed|Post clicked|UNCONFIRMED|value confirmed))/i.test(m);
+        }).map(function(e) {
+          return (e.ok ? "· " : "✗ ") + (e.msg || "");
+        }).filter(Boolean).slice(0, 12);
+      }
+
       state.results.push({
         url: location.href,
         moved: !!result.moved,
@@ -415,13 +453,15 @@
         notesFailReason: result.notesFailReason || "",
         booleanPass: result.booleanPass,
         skipped: !!result.skipped,
+        textStats: result.textStats || null,
+        diagLog: diagLog.length ? diagLog : undefined,
         clickIndex: kind === "click" ? state.clickIndex : undefined,
       });
 
       var afterMoveMs = Math.max(500, parseInt(state.config && state.config.afterMoveNavigateMs, 10) || 1600);
       if (result.moved) await sleep(afterMoveMs);
-      // Let SR finish its note-save API call before navigating away
-      if (result.notesPosted) await sleep(jitter(1400));
+      // Small settle buffer after note-save (the API wait is done inside postKeywordHitsToNotes)
+      if (result.notesPosted) await sleep(jitter(600));
 
       if (kind === "urls") {
         state.queue.shift();

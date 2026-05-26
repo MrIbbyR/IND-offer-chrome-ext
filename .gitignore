@@ -5,3 +5,9 @@ Thumbs.db
 # Build / temp
 *.zip
 *.log
+
+# Dependencies
+node_modules/
+
+# Claude Code memory
+.claude/
