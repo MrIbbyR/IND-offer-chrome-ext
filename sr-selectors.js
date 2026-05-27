@@ -409,8 +409,15 @@
     (document.head || document.documentElement).appendChild(pageScript);
     pageScript.remove();
   } catch (e) {
-    console.warn("[sr-selectors] Could not inject healthcheck into page world:", e.message || e);
-    console.info("[sr-selectors] To run the healthcheck, select the extension context from the DevTools console dropdown (instead of 'top').");
+    // CSP blocks inline scripts on SR — the main-world script handles this instead.
   }
+
+  // Bridge for sr-healthcheck-main-world.js (MAIN world content script)
+  document.addEventListener("__sr_healthcheck_request", function () {
+    var result = printHealthcheck(document);
+    document.dispatchEvent(new CustomEvent("__sr_healthcheck_response", {
+      detail: JSON.stringify(result),
+    }));
+  });
 
 })();

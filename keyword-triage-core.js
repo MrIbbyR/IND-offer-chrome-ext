@@ -2066,6 +2066,7 @@
 
     var resumeWaitMs = Math.max(1500, parseInt(config.resumeWaitMs, 10) || 3000);
     var textParts = [];
+    var _t0 = performance.now();
 
     // Candidate header (name + title) — always visible, loads instantly.
     // Catches titles like "IAM SailPoint Developer" that other sources may miss
@@ -2090,11 +2091,26 @@
         if (pdfText.length > (resumeText || "").length) resumeText = pdfText;
       } catch (_) {}
     }
+    // Retry once if resume is sparse — background tabs render PDFs slower.
+    if (!resumeText || resumeText.length < 1000) {
+      await sleep(4000);
+      var retryResume = "";
+      try { retryResume = getResumeText(doc); } catch (_) {}
+      if (!retryResume || retryResume.length < (resumeText || "").length) {
+        try { var retryPdf = getPdfTextLayerText(doc); if (retryPdf.length > (retryResume || "").length) retryResume = retryPdf; } catch (_) {}
+      }
+      if (retryResume && retryResume.length > (resumeText || "").length) {
+        resumeText = retryResume;
+        log.push({ ok: true, msg: "Resume retry: recovered " + resumeText.length + " chars (background tab was slow)" });
+      }
+    }
     log.push({ ok: !!(resumeText && resumeText.length >= 50),
                msg: "Resume: " + (resumeText ? resumeText.length : 0) + " chars" +
-                    (resumeText && resumeText.length < 200 ? " (sparse — continuing scan)" : "") });
+                    (resumeText && resumeText.length < 200 ? " (sparse — continuing scan)" : ""),
+               ms: Math.round(performance.now() - _t0) });
     if (resumeText) textParts.push(resumeText);
 
+    var _t1 = performance.now();
     try { await ensureProfileTabActive(doc, win); } catch (_) {}
     await sleep(300);
 
@@ -2139,7 +2155,8 @@
     try { excludedKw = getExcludedText(doc); } catch (_) {}
     if (excludedKw) allText = stripExcludedText(allText, excludedKw);
     var textLen = allText.length;
-    log.push({ ok: textLen >= 50, msg: "Total text: " + textLen + " chars (header: " + (headerText || "").length + ", resume: " + (resumeText || "").length + ", profile: " + (profileText || "").length + ", screening: " + screeningText.length + ")" });
+    log.push({ ok: textLen >= 50, msg: "Total text: " + textLen + " chars (header: " + (headerText || "").length + ", resume: " + (resumeText || "").length + ", profile: " + (profileText || "").length + ", screening: " + screeningText.length + ")",
+               ms: Math.round(performance.now() - _t1) });
 
     if (textLen < 50) {
       log.push({ ok: false, msg: "Very little text found on page — resume may not have loaded." });
@@ -2147,6 +2164,7 @@
                textStats: { headerLen: (headerText||"").length, resumeLen: 0, profileLen: 0, totalLen: 0 } };
     }
 
+    var _t2 = performance.now();
     var result = findKeywordHits(allText, keywords);
     var dedupedHits = deduplicateHitsByCanonical(result.hits, canonicalMap);
     var hitLabels = dedupedHits.map(function (h) {
@@ -2154,9 +2172,16 @@
     });
     var hitCount = dedupedHits.length;
 
-    log.push({ ok: true, msg: "Matched " + hitCount + "/" + userKeywordCount + " keywords: " + (hitLabels.length ? hitLabels.join(", ") : "(none)") });
+    log.push({ ok: true, msg: "Matched " + hitCount + "/" + userKeywordCount + " keywords: " + (hitLabels.length ? hitLabels.join(", ") : "(none)"),
+               ms: Math.round(performance.now() - _t2) });
+
+    if (hitCount === 0 && textLen >= 200) {
+      var sample = allText.slice(0, 300).replace(/\s+/g, " ");
+      log.push({ ok: false, msg: "TEXT_SAMPLE: " + sample });
+    }
 
     var notesPosted = false;
+    var _t3 = performance.now();
     // Prepare notes only when there are hits — avoids 1-3s UI work on non-matching profiles
     if (postToNotes && hitCount > 0) {
       try { await prepareNotesSection(doc, win, log); } catch (_) {}
@@ -2167,6 +2192,11 @@
       }
     }
 
+    var _tNotes = Math.round(performance.now() - _t3);
+    if (postToNotes && hitCount > 0) {
+      log.push({ ok: notesPosted, msg: "Notes phase: " + (notesPosted ? "posted" : "failed"), ms: _tNotes });
+    }
+
     var notesFailReason = "";
     if (!notesPosted && postToNotes && hitCount > 0) {
       for (var nfi = log.length - 1; nfi >= 0; nfi--) {
@@ -2174,8 +2204,9 @@
       }
     }
 
+    var _totalMs = Math.round(performance.now() - _t0);
     return { log: log, moved: false, skipped: false, matchedKeywords: hitLabels, hitCount: hitCount,
-             notesPosted: notesPosted, notesFailReason: notesFailReason,
+             notesPosted: notesPosted, notesFailReason: notesFailReason, totalMs: _totalMs,
              textStats: { headerLen: (headerText||"").length, resumeLen: (resumeText||"").length,
                           profileLen: (profileText||"").length, totalLen: textLen } };
   }

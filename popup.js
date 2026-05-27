@@ -1150,7 +1150,11 @@ if (btnKwLastRun) {
       const withMove  = results.filter(r => r.moved).length;
       const skipped   = results.filter(r => r.skipped).length;
 
-      kwLog("✓", `Last run: ${results.length} profiles @ ${time}`);
+      const timings = results.map(r => r.totalMs).filter(Boolean);
+      const avgTime = timings.length ? (timings.reduce((a, b) => a + b, 0) / timings.length / 1000).toFixed(1) : null;
+      const totalTime = timings.length ? (timings.reduce((a, b) => a + b, 0) / 1000 / 60).toFixed(1) : null;
+      const timeSummary = avgTime ? `  ·  ~${avgTime}s/profile` : "";
+      kwLog("✓", `Last run: ${results.length} profiles @ ${time}${timeSummary}`);
       const notesFailed = results.filter(r => r.hitCount > 0 && !r.notesPosted).length;
       kwLog(withHits > 0 ? "✓" : "✗",
         `${withHits} matched  ·  ${withNotes} notes posted  ·  ${withMove} moved fwd  ·  ${skipped} skipped`);
@@ -1166,6 +1170,7 @@ if (btnKwLastRun) {
         // e.g. "0 hits [rsm:0 ttl:312]" means resume was empty but header/page text was found.
         const textHint = (r.hitCount === 0 && r.textStats)
           ? ` [rsm:${r.textStats.resumeLen} ttl:${r.textStats.totalLen}]` : "";
+        const timeTag = r.totalMs ? `${(r.totalMs / 1000).toFixed(1)}s` : "";
         const tags = [
           r.skipped ? "skip" : "",
           r.hitCount > 0 ? r.hitCount + " hits" : "0 hits" + textHint,
@@ -1173,6 +1178,7 @@ if (btnKwLastRun) {
           boolTag,
           r.notesPosted ? "note✓" : (r.hitCount > 0 ? "note✗" + (r.notesFailReason ? " [" + r.notesFailReason.replace(/\s*—.*/, "").trim().slice(0, 30) + "]" : "") : ""),
           r.moved ? "fwd✓" : "",
+          timeTag,
         ].filter(Boolean).join(" · ");
         kwLog(r.hitCount > 0 ? "✓" : "✗", `[${seg}] ${tags}`);
         // Show per-profile diagnostic log for note failures and 0-hit profiles.

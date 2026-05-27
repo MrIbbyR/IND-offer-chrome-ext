@@ -208,6 +208,8 @@
 
   async function runAsParallelWorker() {
     if (!isProfilePage()) return false;
+    if (window.__srParallelWorkerLock) return false;
+    window.__srParallelWorkerLock = true;
 
     var isWorker = false;
     try {
@@ -219,14 +221,14 @@
       });
       isWorker = resp && resp.active;
     } catch (_) {}
-    if (!isWorker) return false;
+    if (!isWorker) { window.__srParallelWorkerLock = false; return false; }
 
     var cfgData = null;
     try {
       var store = await chrome.storage.local.get(["srParallelWorkerConfig"]);
       cfgData = store.srParallelWorkerConfig;
     } catch (_) {}
-    if (!cfgData) return false;
+    if (!cfgData) { window.__srParallelWorkerLock = false; return false; }
 
     await sleepJitter(Math.max(1500, parseInt(cfgData.resumeWaitMs, 10) || 3000));
 
@@ -379,6 +381,7 @@
 
       if (!isProfilePage()) return;
 
+      var _qT0 = performance.now();
       var cfgWait = state.config && state.config.resumeWaitMs;
       var delay = Math.max(400, parseInt(state.initialDelayMs, 10) || parseInt(cfgWait, 10) || 2000);
       await sleep(delay);
@@ -454,6 +457,8 @@
         booleanPass: result.booleanPass,
         skipped: !!result.skipped,
         textStats: result.textStats || null,
+        totalMs: Math.round(performance.now() - _qT0),
+        coreMs: result.totalMs || null,
         diagLog: diagLog.length ? diagLog : undefined,
         clickIndex: kind === "click" ? state.clickIndex : undefined,
       });

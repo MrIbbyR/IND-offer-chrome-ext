@@ -31,6 +31,12 @@
       "matches": ["https://*.smartrecruiters.com/*"],
       "js": ["keyword-expansions.js", "salary-triage-autorun.js", "keyword-triage-autorun.js"],
       "run_at": "document_idle"
+    },
+    {
+      "matches": ["https://*.smartrecruiters.com/*"],
+      "js": ["sr-healthcheck-main-world.js"],
+      "run_at": "document_idle",
+      "world": "MAIN"
     }
   ]
 }
