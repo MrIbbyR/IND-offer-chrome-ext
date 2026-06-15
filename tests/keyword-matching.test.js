@@ -9,6 +9,15 @@ const {
   isoListHit,
   findKeywordHits,
   deduplicateHitsByCanonical,
+  formatNoteText,
+  formatNoteHtml,
+  dedupeTextSegments,
+  collapseInlineRepeats,
+  noteConfirmMarker,
+  feedDeltaCount,
+  looksLikeSrSummaryChrome,
+  resumeWasRead,
+  countsFromResume,
 } = require('../keyword-triage-core.js');
 const { resolveKeywordsWithMeta } = require('../keyword-expansions.js');
 
@@ -339,5 +348,322 @@ describe('IAM tool keyword matching — two-word vs compound-word variants', () 
     const out = deduplicateHitsByCanonical(hits, canonicalMap);
     assert.ok(out.length > 0, 'CIAM should match spelled-out form');
     assert.strictEqual(out[0].keyword, 'CIAM');
+  });
+});
+
+describe('Docker compound-word containment (production miss: pic 5)', () => {
+  // Reported in production: keyword "docker" missed on resumes that mention
+  // "Dockerfile" or "Dockerized" but never say "Docker" as a standalone word.
+  // The regex fallback rejects "Dockerfile" because the trailing boundary
+  // (?![A-Za-z0-9]) fails on the "f" that follows "docker". Fix is to add
+  // compound forms to the expansion table so the keyword resolver covers them.
+
+  it('"docker" keyword matches "Dockerfile" in resume text', () => {
+    const text = 'Authored the Dockerfile and CI pipeline for the service';
+    const { keywords, canonicalMap } = resolveKeywordsWithMeta('docker');
+    const { hits } = findKeywordHits(text, keywords);
+    const out = deduplicateHitsByCanonical(hits, canonicalMap);
+    assert.ok(out.length > 0, 'docker should match "Dockerfile"');
+    assert.strictEqual(out[0].keyword, 'docker');
+  });
+
+  it('"docker" keyword matches "Dockerized" in resume text', () => {
+    const text = 'Dockerized the legacy services and deployed to AKS';
+    const { keywords, canonicalMap } = resolveKeywordsWithMeta('docker');
+    const { hits } = findKeywordHits(text, keywords);
+    const out = deduplicateHitsByCanonical(hits, canonicalMap);
+    assert.ok(out.length > 0, 'docker should match "Dockerized"');
+    assert.strictEqual(out[0].keyword, 'docker');
+  });
+
+  it('"docker" keyword still matches standalone "Docker" (no regression)', () => {
+    const text = 'Containerized services with Docker and Kubernetes';
+    const { keywords, canonicalMap } = resolveKeywordsWithMeta('docker');
+    const { hits } = findKeywordHits(text, keywords);
+    const out = deduplicateHitsByCanonical(hits, canonicalMap);
+    assert.ok(out.length > 0);
+    assert.strictEqual(out[0].keyword, 'docker');
+  });
+});
+
+describe('formatNoteText', () => {
+  it('prepends a "Name | URL" header line above the match summary', () => {
+    const out = formatNoteText(
+      ['Python', 'AWS'], 2, 5, '',
+      'Jane Smith', 'https://jobs.smartrecruiters.com/abc'
+    );
+    assert.strictEqual(
+      out,
+      'Jane Smith | https://jobs.smartrecruiters.com/abc\nPython, AWS - Matched 2/5'
+    );
+  });
+  it('honours an existing note prefix on the summary line', () => {
+    const out = formatNoteText(
+      ['Python'], 1, 1, 'Boolean: ',
+      'Jane Smith', 'https://example.com/x'
+    );
+    assert.strictEqual(
+      out,
+      'Jane Smith | https://example.com/x\nBoolean: Python - Matched 1/1'
+    );
+  });
+  it('uses name alone when URL is missing', () => {
+    const out = formatNoteText(['Go'], 1, 2, '', 'John Doe', '');
+    assert.strictEqual(out, 'John Doe\nGo - Matched 1/2');
+  });
+  it('uses URL alone when name is missing', () => {
+    const out = formatNoteText(['Go'], 1, 2, '', '', 'https://example.com/y');
+    assert.strictEqual(out, 'https://example.com/y\nGo - Matched 1/2');
+  });
+  it('falls back to the bare summary when name and URL are both absent', () => {
+    const out = formatNoteText(['Go', 'Rust'], 2, 4, '');
+    assert.strictEqual(out, 'Go, Rust - Matched 2/4');
+  });
+  it('writes "No keyword tagged" when there are zero hits', () => {
+    const out = formatNoteText([], 0, 5, '', 'Jane Smith', 'https://x.test/a');
+    assert.strictEqual(
+      out,
+      'Jane Smith | https://x.test/a\nNo keyword tagged - Matched 0/5'
+    );
+  });
+  it('keeps the prefix on a zero-hit summary (boolean FAIL)', () => {
+    const out = formatNoteText([], 0, 3, '[FAIL] ', '', '');
+    assert.strictEqual(out, '[FAIL] No keyword tagged - Matched 0/3');
+  });
+  it('appends the partial-scan warning when the resume PDF was not read', () => {
+    const out = formatNoteText(['phd'], 1, 5, '', 'Jane', 'https://x.test/a', true);
+    assert.strictEqual(
+      out,
+      'Jane | https://x.test/a\nphd - Matched 1/5\n⚠ Resume PDF not read — partial scan (profile data only)'
+    );
+  });
+  it('omits the warning when the scan was complete', () => {
+    const out = formatNoteText(['phd'], 1, 5, '', 'Jane', 'https://x.test/a', false);
+    assert.ok(!/partial scan/.test(out));
+  });
+});
+
+describe('dedupeTextSegments', () => {
+  it('collapses repeated chunks so occurrence counts are not inflated', () => {
+    // Same education line captured 5× by overlapping profile selectors.
+    const line = 'PhD in Computer Science, University of Madrid';
+    const inflated = Array(5).fill(line).join('\n');
+    const deduped = dedupeTextSegments(inflated);
+    // Before: 5 occurrences of "phd"; after: 1.
+    assert.strictEqual((deduped.match(/phd/gi) || []).length, 1);
+    assert.strictEqual(findKeywordHits(inflated, ['phd']).hits[0].count, 5);
+    assert.strictEqual(findKeywordHits(deduped, ['phd']).hits[0].count, 1);
+  });
+  it('preserves presence of every distinct segment (hit/miss unchanged)', () => {
+    const text = 'Worked with NLP models\nWorked with NLP models\nBuilt PyTorch pipelines';
+    const deduped = dedupeTextSegments(text);
+    assert.ok(/nlp/i.test(deduped));
+    assert.ok(/pytorch/i.test(deduped));
+    assert.strictEqual((deduped.match(/nlp/gi) || []).length, 1);
+  });
+  it('keeps short (<12 char) segments verbatim even when repeated', () => {
+    const deduped = dedupeTextSegments('Go\nGo\nRust');
+    assert.strictEqual(deduped, 'Go\nGo\nRust');
+  });
+});
+
+describe('countsFromResume', () => {
+  const { keywords, canonicalMap } = resolveKeywordsWithMeta('phd');
+  const filler = ' '.padEnd(0) + 'Experienced data scientist with a strong publication record and applied research background across multiple industry and academic projects spanning many years of work. ';
+
+  it('counts phd from the resume (not inflated by profile chrome aliases)', () => {
+    // Resume mentions PhD twice; no "doctorate" chrome here.
+    const resume = 'Adrian Rubio. PhD in Physics at University of Valencia. ' + filler +
+                   'Completed my PhD research in high energy physics in 2025. ' + filler;
+    const map = countsFromResume(resume, keywords, canonicalMap);
+    assert.strictEqual(map.phd, 2);
+  });
+  it('returns null for SR summary chrome (so caller keeps the union count)', () => {
+    const chrome = 'Latest Resume More Candidate summary High priority skills 4/8 Other skills 2/33 ' +
+      'Doctorate degree in and philosophy See details Profile Resume View Profile ' +
+      'Order assessments No tags added for this candidate yet. ' + filler;
+    assert.strictEqual(countsFromResume(chrome, keywords, canonicalMap), null);
+  });
+  it('returns null for sparse text (< 300 chars)', () => {
+    assert.strictEqual(countsFromResume('PhD here', keywords, canonicalMap), null);
+  });
+});
+
+describe('looksLikeSrSummaryChrome', () => {
+  // Real ~1000-char sidebar boilerplate captured when the PDF text layer fails to
+  // render (from the Gilberto/Ana diagnostics). Must be flagged so the retry fires.
+  const srChrome =
+    'Gilberto Jesús Brito AI / ML Engineer at SDG Group Valencian Community, Spain ' +
+    'Latest Resume More Candidate summary High priority skills 4/8 Other skills 2/33 ' +
+    'Worked in the engineer role for 2 years Doctorate degree in and philosophy ' +
+    'See details Profile Resume View Profile Applicant profile ' +
+    'Order assessments No tags added for this candidate yet.';
+  // Real resume PDF body (from the Adrián diagnostics) — must NOT be flagged.
+  const realResume =
+    'Adrián Rubio Jiménez PhD in Physics ML engineer Data Scientist Valencia, Spain ' +
+    'Professional Summary Working as an ML Engineer, researching on new methods for LLM ' +
+    'compression. PhD in Physics at University of Valencia. ML libraries and tools: ' +
+    'HuggingFace, PyTorch, TensorFlow, Keras, XGBoost.';
+
+  it('flags SR candidate-summary sidebar chrome', () => {
+    assert.strictEqual(looksLikeSrSummaryChrome(srChrome), true);
+  });
+  it('does not flag a real resume PDF body', () => {
+    assert.strictEqual(looksLikeSrSummaryChrome(realResume), false);
+  });
+  it('returns false for empty/missing text', () => {
+    assert.strictEqual(looksLikeSrSummaryChrome(''), false);
+    assert.strictEqual(looksLikeSrSummaryChrome(null), false);
+  });
+});
+
+describe('formatNoteHtml', () => {
+  it('renders the profile URL as an "SR Profile" hyperlink', () => {
+    const out = formatNoteHtml(
+      ['Python', 'AWS'], 2, 5, '',
+      'Jane Smith', 'https://jobs.smartrecruiters.com/abc'
+    );
+    assert.strictEqual(
+      out,
+      'Jane Smith | <a href="https://jobs.smartrecruiters.com/abc">SR Profile</a><br>Python, AWS - Matched 2/5'
+    );
+  });
+  it('renders "No keyword tagged" with the hyperlink on zero hits', () => {
+    const out = formatNoteHtml([], 0, 4, '', 'John Doe', 'https://x.test/p');
+    assert.strictEqual(
+      out,
+      'John Doe | <a href="https://x.test/p">SR Profile</a><br>No keyword tagged - Matched 0/4'
+    );
+  });
+  it('escapes HTML-special characters in the candidate name', () => {
+    const out = formatNoteHtml(['Go'], 1, 1, '', 'A & B <x>', 'https://x.test/q');
+    assert.strictEqual(
+      out,
+      'A &amp; B &lt;x&gt; | <a href="https://x.test/q">SR Profile</a><br>Go - Matched 1/1'
+    );
+  });
+  it('appends the partial-scan warning (HTML, escaped) when set', () => {
+    const out = formatNoteHtml(['phd'], 1, 5, '', 'Jane', 'https://x.test/a', true);
+    assert.ok(out.includes('<br>⚠ Resume PDF not read'));
+    assert.ok(out.includes('phd - Matched 1/5'));
+  });
+});
+
+describe('collapseInlineRepeats — Ctrl+F-accurate counts on duplicated PDF text', () => {
+  it('collapses an immediately-repeated phrase to one', () => {
+    assert.strictEqual(
+      collapseInlineRepeats('Azure Azure Azure done').replace(/\s+/g, ' ').trim(),
+      'Azure done'
+    );
+  });
+
+  it('collapses spacing variants pdf.js emits (AI Fundamentals vs AIFundamentals)', () => {
+    const out = collapseInlineRepeats('Azure AI Fundamentals AzureAIFundamentals Azure AI Fundamentals tail')
+      .replace(/\s+/g, ' ').trim();
+    assert.strictEqual(out, 'Azure AI Fundamentals tail');
+  });
+
+  it('preserves genuine non-consecutive repeats', () => {
+    assert.strictEqual(
+      collapseInlineRepeats('azure here and azure there').replace(/\s+/g, ' ').trim(),
+      'azure here and azure there'
+    );
+  });
+
+  it('keeps camelCase intact so downstream token splitting still works', () => {
+    // survivor text is original-case → buildTokenIndex can still split PyTorch
+    const out = collapseInlineRepeats('built with PyTorch PyTorch PyTorch today');
+    assert.ok(out.includes('PyTorch'));
+    const idx = buildTokenIndex(out);
+    assert.strictEqual(kwHitsInIndex('py torch', idx, false), 1);
+  });
+
+  it('is a no-op on short / empty input', () => {
+    assert.strictEqual(collapseInlineRepeats(''), '');
+    assert.strictEqual(collapseInlineRepeats('Python dev'), 'Python dev');
+  });
+});
+
+describe('countsFromResume — de-inflates pdf.js text-layer duplication', () => {
+  const meta = resolveKeywordsWithMeta('azure, pytorch, tensorflow, nlp, aws');
+
+  it('counts a tripled text-layer blob the way a human reads it once', () => {
+    const spans = [
+      'Senior AI Engineer building NLP systems',
+      'Microsoft Certified: Azure AI Fundamentals 2024',
+      'Microsoft Certified: Azure Fundamentals 2024',
+      'AWS Certified Cloud Practitioner 2024',
+      'Python Libraries: HuggingFace, Tensorflow, Pytorch, spacy, NLTK',
+      'Azure: Azure Directory, Virtual Machine, API Gateway, AWS Lambda',
+      'Built NLP pipelines and deployed to production',
+    ];
+    const variant = (s) => s.replace(/Fundamentals/g, 'Fund amentals').replace(/HuggingFace/g, 'Hugging Face');
+    const blob = spans.map((s) => `${s} ${s} ${variant(s)}`).join(' ');
+    const counts = countsFromResume(blob, meta.keywords, meta.canonicalMap);
+    assert.strictEqual(counts.azure, 4);       // 2 certs + 2 in skills line
+    assert.strictEqual(counts.pytorch, 1);
+    assert.strictEqual(counts.tensorflow, 1);
+    assert.strictEqual(counts.nlp, 2);
+    assert.strictEqual(counts.aws, 2);
+  });
+
+  it('does not suppress real counts in a clean (non-duplicated) resume', () => {
+    const clean = `Skills: Python, PyTorch, TensorFlow, Azure, NLP, AWS.
+Built NLP pipelines on Azure. Deployed models to Azure and AWS.
+PhD in machine learning. Used PyTorch for research and NLP at scale.
+${'pad '.repeat(120)}`;
+    const counts = countsFromResume(clean, meta.keywords, meta.canonicalMap);
+    assert.strictEqual(counts.azure, 3);
+    assert.strictEqual(counts.aws, 2);
+    assert.strictEqual(counts.nlp, 3);
+    assert.ok(counts.pytorch >= 2);
+  });
+});
+
+describe('note-save confirmation — feed-appearance signal', () => {
+  it('marker is the normalised, capped matched-keyword body', () => {
+    assert.strictEqual(noteConfirmMarker(['NLP', 'PyTorch', 'PhD'], 3), 'nlp, pytorch, phd');
+  });
+  it('marker for zero hits is the "no keyword tagged" body', () => {
+    assert.strictEqual(noteConfirmMarker([], 0), 'no keyword tagged');
+  });
+
+  // contenteditable (div) editor: live note text is in textContent of BOTH the
+  // section and the compose input, so they cancel — this was the case that always
+  // logged UNCONFIRMED because the div never clears.
+  it('div editor: detects the note in the feed even though the compose box keeps its text', () => {
+    const marker = noteConfirmMarker(['NLP', 'PyTorch'], 2); // 'nlp, pytorch'
+    const composeText = 'Jane | https://x | NLP, PyTorch - Matched 2/5';
+    // BEFORE post: only the compose box holds the text → feed delta 0
+    assert.strictEqual(feedDeltaCount(composeText, composeText, marker), 0);
+    // AFTER post: feed now also renders the note, compose box still holds its copy → delta 1
+    const sectionAfter = 'Jane — NLP, PyTorch - Matched 2/5 · 2m ago ' + composeText;
+    assert.strictEqual(feedDeltaCount(sectionAfter, composeText, marker), 1);
+  });
+
+  // textarea editor: live value is in NEITHER textContent → no double count.
+  it('textarea editor: detects feed note with empty textContent (value lives off-DOM)', () => {
+    const marker = noteConfirmMarker(['azure'], 1);
+    // textarea.textContent is empty (its value is not reflected in textContent)
+    assert.strictEqual(feedDeltaCount('', '', marker), 0);
+    assert.strictEqual(feedDeltaCount('Jane — azure - Matched 1/3 · now', '', marker), 1);
+  });
+
+  it('does not false-confirm when nothing new rendered', () => {
+    const marker = noteConfirmMarker(['kubernetes'], 1);
+    assert.strictEqual(feedDeltaCount('unrelated feed content here', 'kubernetes - Matched 1/2', marker), 0);
+  });
+});
+
+describe('resumeWasRead — partial-scan honesty (resume PDF actually read?)', () => {
+  it('true for substantial non-chrome resume text', () => {
+    assert.strictEqual(resumeWasRead('Senior NLP engineer with PyTorch and Azure experience across teams', false), true);
+  });
+  it('false when the captured text is SR summary chrome', () => {
+    assert.strictEqual(resumeWasRead('whatever long text here that is plenty long enough', true), false);
+  });
+  it('false when the resume failed to load (empty/sub-50 chars)', () => {
+    assert.strictEqual(resumeWasRead('', false), false);
+    assert.strictEqual(resumeWasRead('   short   ', false), false);
   });
 });

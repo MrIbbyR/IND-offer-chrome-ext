@@ -1195,6 +1195,145 @@ if (btnKwLastRun) {
   });
 }
 
+// ── Inspect per-profile diagnostics (last 20 profile scans) ──
+const btnKwDiagHistory = document.getElementById("btnKwDiagHistory");
+const kwDiagPanel      = document.getElementById("kwDiagPanel");
+if (btnKwDiagHistory && kwDiagPanel) {
+  const DIAG_PREFIX = "lastRunDiag_";
+
+  function escapeHtml(s) {
+    return String(s == null ? "" : s)
+      .replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;")
+      .replace(/"/g, "&quot;").replace(/'/g, "&#39;");
+  }
+
+  function shortUrl(u) {
+    if (!u) return "(no url)";
+    const seg = u.split("/").filter(Boolean).pop() || u;
+    return seg.length > 28 ? seg.slice(0, 28) + "…" : seg;
+  }
+
+  async function loadDiagEntries() {
+    const all = await chrome.storage.local.get(null);
+    const entries = [];
+    for (const k of Object.keys(all)) {
+      if (k.indexOf(DIAG_PREFIX) === 0) entries.push(all[k]);
+    }
+    entries.sort((a, b) => (b.timestamp || 0) - (a.timestamp || 0));
+    return entries;
+  }
+
+  function renderDetail(entry) {
+    const t = new Date(entry.timestamp || 0).toLocaleString();
+    const stats = entry.textStats || {};
+    const src = entry.textSources || {};
+    return `
+      <div style="padding:6px 0;border-top:1px dashed var(--border);margin-top:4px">
+        <div style="color:var(--muted);font-size:11px">${escapeHtml(t)}</div>
+        <div style="word-break:break-all"><a href="${escapeHtml(entry.profileUrl||'')}" target="_blank" style="color:var(--accent)">${escapeHtml(entry.profileUrl||'(no url)')}</a></div>
+        <div style="margin-top:4px">
+          <span style="color:var(--accent)">matched:</span> ${escapeHtml((entry.matchedUserKeywords||[]).join(", ") || "—")}
+        </div>
+        <div>
+          <span style="color:var(--warn)">missed:</span> ${escapeHtml((entry.missedUserKeywords||[]).join(", ") || "—")}
+        </div>
+        <div style="color:var(--muted);font-size:11px;margin-top:4px">
+          lens: header ${stats.headerLen||0} · resume ${stats.resumeLen||0} · profile ${stats.profileLen||0} · screening ${stats.screeningLen||0} · fullPage ${stats.fullPageLen||0} · total ${stats.totalLen||0}
+        </div>
+        <div style="color:var(--muted);font-size:11px">
+          input: ${escapeHtml(entry.userInput||"")} · type: ${escapeHtml(entry.type||"")} · ${entry.durationMs||0}ms
+        </div>
+        <details style="margin-top:6px">
+          <summary style="cursor:pointer;color:var(--accent)">extractedText (${(entry.extractedText||"").length} chars)</summary>
+          <textarea readonly style="width:100%;height:180px;background:var(--bg);color:var(--text);font-family:var(--mono);font-size:11px;border:1px solid var(--border);padding:4px;margin-top:4px">${escapeHtml(entry.extractedText||"")}</textarea>
+        </details>
+        <details style="margin-top:4px">
+          <summary style="cursor:pointer;color:var(--accent)">per-source text</summary>
+          <div style="font-size:11px">
+            <div><b>header</b> (${(src.header||"").length})</div><textarea readonly style="width:100%;height:60px;background:var(--bg);color:var(--text);font-family:var(--mono);font-size:11px;border:1px solid var(--border);padding:4px">${escapeHtml(src.header||"")}</textarea>
+            <div><b>resume</b> (${(src.resume||"").length})</div><textarea readonly style="width:100%;height:80px;background:var(--bg);color:var(--text);font-family:var(--mono);font-size:11px;border:1px solid var(--border);padding:4px">${escapeHtml(src.resume||"")}</textarea>
+            <div><b>profile</b> (${(src.profile||"").length})</div><textarea readonly style="width:100%;height:60px;background:var(--bg);color:var(--text);font-family:var(--mono);font-size:11px;border:1px solid var(--border);padding:4px">${escapeHtml(src.profile||"")}</textarea>
+            <div><b>screening</b> (${(src.screening||"").length})</div><textarea readonly style="width:100%;height:50px;background:var(--bg);color:var(--text);font-family:var(--mono);font-size:11px;border:1px solid var(--border);padding:4px">${escapeHtml(src.screening||"")}</textarea>
+            <div><b>fullPage</b> (${(src.fullPage||"").length})</div><textarea readonly style="width:100%;height:80px;background:var(--bg);color:var(--text);font-family:var(--mono);font-size:11px;border:1px solid var(--border);padding:4px">${escapeHtml(src.fullPage||"")}</textarea>
+          </div>
+        </details>
+      </div>
+    `;
+  }
+
+  btnKwDiagHistory.addEventListener("click", async () => {
+    kwStatusBox.classList.add("visible");
+    if (kwDiagPanel.style.display === "block") {
+      kwDiagPanel.style.display = "none";
+      kwDiagPanel.innerHTML = "";
+      return;
+    }
+    kwDiagPanel.style.display = "block";
+    kwDiagPanel.innerHTML = '<div style="color:var(--muted)">loading…</div>';
+    try {
+      const entries = await loadDiagEntries();
+      if (!entries.length) {
+        kwDiagPanel.innerHTML = '<div style="color:var(--muted);padding:4px">No diagnostics yet — run a keyword search on at least one profile.</div>';
+        return;
+      }
+      let html = `<div style="display:flex;gap:6px;align-items:center;margin-bottom:4px">
+        <span style="color:var(--muted)">${entries.length} entries</span>
+        <button type="button" id="kwDiagCopyJson" class="btn-salary secondary" style="font-size:11px;padding:2px 8px">Copy all JSON</button>
+        <button type="button" id="kwDiagClear" class="btn-salary danger" style="font-size:11px;padding:2px 8px">Clear all</button>
+      </div>`;
+      entries.forEach((e, i) => {
+        const matched = (e.matchedUserKeywords || []).length;
+        const missed = (e.missedUserKeywords || []).length;
+        const t = new Date(e.timestamp || 0).toLocaleTimeString();
+        html += `<div data-diag-row="${i}" style="cursor:pointer;padding:4px 0;border-bottom:1px solid var(--border)">
+          <span style="color:var(--muted)">${escapeHtml(t)}</span>
+          · <span>${escapeHtml(shortUrl(e.profileUrl))}</span>
+          · <span style="color:var(--accent)">${matched}✓</span>
+          · <span style="color:var(--warn)">${missed}✗</span>
+        </div>
+        <div id="kwDiagDetail_${i}" style="display:none"></div>`;
+      });
+      kwDiagPanel.innerHTML = html;
+
+      kwDiagPanel.querySelectorAll("[data-diag-row]").forEach((row) => {
+        row.addEventListener("click", () => {
+          const idx = row.getAttribute("data-diag-row");
+          const detail = document.getElementById(`kwDiagDetail_${idx}`);
+          if (!detail) return;
+          if (detail.style.display === "block") {
+            detail.style.display = "none";
+            detail.innerHTML = "";
+          } else {
+            detail.style.display = "block";
+            detail.innerHTML = renderDetail(entries[Number(idx)]);
+          }
+        });
+      });
+
+      document.getElementById("kwDiagCopyJson")?.addEventListener("click", async (ev) => {
+        ev.stopPropagation();
+        try {
+          await navigator.clipboard.writeText(JSON.stringify(entries, null, 2));
+          ev.target.textContent = "Copied!";
+          setTimeout(() => { ev.target.textContent = "Copy all JSON"; }, 1500);
+        } catch (e) {
+          ev.target.textContent = "Copy failed";
+        }
+      });
+
+      document.getElementById("kwDiagClear")?.addEventListener("click", async (ev) => {
+        ev.stopPropagation();
+        const keys = Object.keys(await chrome.storage.local.get(null)).filter(k => k.indexOf(DIAG_PREFIX) === 0);
+        if (!keys.length) return;
+        await chrome.storage.local.remove(keys);
+        kwDiagPanel.innerHTML = '<div style="color:var(--muted);padding:4px">Cleared.</div>';
+      });
+    } catch (e) {
+      kwDiagPanel.innerHTML = `<div style="color:var(--warn)">Error: ${escapeHtml(String(e?.message || e))}</div>`;
+    }
+  });
+}
+
 function contentFill(payload) {
   const TARGET = "INR";
   const log = [];

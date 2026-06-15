@@ -56,6 +56,8 @@ Stateless by design. Manages:
 - Parallel keyword worker tab orchestration (creates/reuses 2–3 worker tabs, routes messages between them and the popup via `chrome.runtime.onMessage`)
 - Completion notifications (`chrome.notifications`) and audio beep (injected into an active SR tab via `chrome.scripting.executeScript`, since `AudioContext` is unavailable in service workers)
 - Tab cleanup on queue completion
+- **Resume-render focus handshake** — worker tabs are created `active: false`, but pdf.js does not render in hidden tabs (Chrome pauses `requestAnimationFrame` when `visibilityState === "hidden"`), so the resume text layer never appears and extraction falls back to SR profile chrome. The core requests `srRequestResumeFocus` before extracting the resume; the background `resumeFocus` manager briefly foregrounds that worker tab (serialized — one at a time, focus hands off directly between workers), then restores the user's tab on `srReleaseResumeFocus` (or a 25s safety timeout). The core only requests focus when `document.visibilityState !== "visible"`, so single-tab/foreground runs are unaffected.
+- **Resume attachment fallback** — when the inline viewer still won't render after the focus handshake + retries, the core clicks the "Resume" attachment (which opens the resume in a new tab) after `srArmResumeCapture`. The background catches that tab by `openerTabId`, foregrounds it so pdf.js renders, extracts text via `chrome.scripting.executeScript`, closes it, and returns the text on `srGetResumeCapture`. Only fires on chrome-only extractions, so it doesn't slow the normal path.
 
 ### Shadow DOM Traversal
 
@@ -87,3 +89,21 @@ Two search modes:
 ### XLSX Parser (`xlsx-mini.js`)
 
 Self-contained async XLSX parser with no external dependencies (no SheetJS, no DOM parser). Used exclusively by the Mr Offer tab for drag-and-drop offer letter field filling with fuzzy label matching and annual ↔ monthly salary derivation.
+
+## Lessons
+
+### Reported keyword misses: diagnose, don't guess
+
+When a user reports "keyword X missed on profile Y", the matching logic in `keyword-triage-core.js` is rarely the cause. A keyword miss can come from any of three layers, and they need different evidence:
+
+1. **Matching gap** — the canonical/expansion forms in `KEYWORD_EXPANSIONS` don't cover the variant used in the resume. The regex fallback in `sepFlexiblePatternSource` enforces a `(?![A-Za-z0-9])` boundary, so a single-token keyword won't match a longer compound word that contains it (e.g. `docker` won't match `Dockerfile` without an explicit expansion entry). Fix by adding the compound forms to the expansion table.
+2. **Extraction failure** — the resume text never reaches `findKeywordHits`. Common in PDF resumes where pdf.js text layers don't render all pages, or where the resume tab isn't activated in time.
+3. **Exclusion over-strip** — `stripExcludedText` removes ALL occurrences of any ≥10-char sidebar phrase from `allText`. If the resume and the job-description sidebar happen to share a long phrase, the resume's keywords inside that phrase are also nuked.
+
+Before changing code: open the popup → **Inspect diagnostics** (the per-profile `lastRunDiag_<timestamp>` entries saved in `chrome.storage.local`, capped at 20). For the failing profile, grep `extractedText` and each `textSources.*` segment for the missed keyword:
+
+- Keyword present in `extractedText` → matching bug. Fix in `keyword-expansions.js` or `findKeywordHits`.
+- Keyword present in `textSources.fullPage` but not in `extractedText` → exclusion/strip bug. Fix in `stripExcludedText` or `EXCLUDED_SELECTORS`.
+- Keyword absent from every source → extraction bug. Fix in the relevant `get*Text` function or the resume-tab/iframe wait logic.
+
+Do not propose fixes from screenshots alone — unit tests with realistic text usually pass even when production fails, because the bug is upstream of matching. The diagnostic capture (added in `runKeywordTriageWithDoc` / `runBooleanTriageWithDoc`) exists specifically to remove that ambiguity.

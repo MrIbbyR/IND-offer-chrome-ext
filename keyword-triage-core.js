@@ -139,6 +139,128 @@
     return s.trim();
   }
 
+  /**
+   * Collapse exact-duplicate text segments before keyword counting.
+   *
+   * SR assembles candidate text from many overlapping sources: the resume, a
+   * full-page shadow-DOM scan that re-captures that same resume, and
+   * getProfileOverviewText's selector list (`[class*="profile"]`, `*="skills"`,
+   * `*="summary"`, `*="education"` …) which matches nested and repeated elements.
+   * The identical chunk can therefore land in allText 5-10×, inflating occurrence
+   * counts (e.g. "phd (x65)" when the resume says PhD six times).
+   *
+   * Splitting on newlines and dropping repeat segments removes that duplication.
+   * Every distinct segment is kept once, so keyword *presence* — and thus the
+   * Matched X/Y hit/miss result — is unchanged; only the displayed counts shrink
+   * to their true values. Short segments (< 12 chars) are kept verbatim so unique
+   * one-word data is never lost.
+   */
+  function dedupeTextSegments(text) {
+    if (!text) return text;
+    var segs = String(text).split(/\n+/);
+    var seen = Object.create(null);
+    var out = [];
+    for (var i = 0; i < segs.length; i++) {
+      var key = segs[i].replace(/\s+/g, " ").trim().toLowerCase();
+      if (!key) continue;
+      if (key.length >= 12) {
+        if (seen[key]) continue;
+        seen[key] = true;
+      }
+      out.push(segs[i]);
+    }
+    return out.join("\n");
+  }
+
+  /**
+   * Collapse phrase runs that are immediately repeated within a single line.
+   *
+   * dedupeTextSegments only folds duplication that sits on its own newline. But
+   * SR renders most resumes through pdf.js, whose text layer (and many
+   * graphically-designed CV templates) emit the same visual text 2-3× as
+   * overlapping spans. getPdfTextLayerText space-joins those spans into one
+   * newline-free blob, so a single "Azure" mention is tokenised 3-4× and counted
+   * as "azure (x20)" — even though a recruiter reading the page sees it ~5×.
+   *
+   * This collapses runs the way a human reads the page once: it removes only a
+   * run that is IMMEDIATELY repeated, so genuine repeats in different sentences
+   * survive and counts stay truthful. The comparison runs on a lowercased,
+   * separator-free character stream, so the spacing variants pdf.js emits
+   * ("AI Fundamentals" vs "AIFundamentals") collapse to the same unit. Survivors
+   * keep their original casing and punctuation, so downstream camelCase
+   * splitting and phrase matching are unchanged.
+   */
+  function collapseInlineRepeats(text) {
+    if (!text) return text;
+    var s = String(text);
+    var re = /[A-Za-z0-9]+/g, m, toks = [];
+    while ((m = re.exec(s)) !== null) {
+      toks.push({ s: m.index, e: re.lastIndex });
+      if (toks.length > 80000) return text; // pathological input — bail, unchanged
+    }
+    var n = toks.length;
+    if (n < 4) return text;
+
+    // Separator-free lowercased char stream + each token's start offset in it.
+    var C = "", coff = new Array(n);
+    for (var i = 0; i < n; i++) {
+      coff[i] = C.length;
+      C += s.slice(toks[i].s, toks[i].e).toLowerCase();
+    }
+    var Clen = C.length;
+    var MAXM = 200; // longest repeated unit (in chars) we will collapse
+
+    function eqAt(a, b, len) {
+      for (var k = 0; k < len; k++) {
+        if (C.charCodeAt(a + k) !== C.charCodeAt(b + k)) return false;
+      }
+      return true;
+    }
+
+    var keep = new Array(n);
+    for (var k0 = 0; k0 < n; k0++) keep[k0] = true;
+
+    var t = 0;
+    while (t < n) {
+      var p = coff[t];
+      // Largest unit [t, bestEnd) whose chars are immediately repeated next.
+      var bestEnd = -1, bestM = 0;
+      for (var e = t + 1; e < n; e++) {
+        var mlen = coff[e] - p;
+        if (mlen > MAXM) break;
+        if (p + 2 * mlen > Clen) break;
+        if (eqAt(p, p + mlen, mlen)) { bestEnd = e; bestM = mlen; }
+      }
+      if (bestEnd > t) {
+        // Keep the first copy [t, bestEnd); drop every immediately-repeated copy.
+        var nextStart = p + bestM;
+        var j = bestEnd;
+        while (nextStart + bestM <= Clen && eqAt(p, nextStart, bestM)) {
+          while (j < n && coff[j] < nextStart + bestM) { keep[j] = false; j++; }
+          nextStart += bestM;
+        }
+        t = j; // resume after the dropped copies
+      } else {
+        t++;
+      }
+    }
+
+    // Rebuild: emit survivors with their original text; replace each dropped
+    // token (and the separator before it) with a single space.
+    var out = "", cursor = 0;
+    for (var x = 0; x < n; x++) {
+      if (keep[x]) {
+        out += s.slice(cursor, toks[x].e);
+        cursor = toks[x].e;
+      } else {
+        out += " ";
+        cursor = toks[x].e;
+      }
+    }
+    out += s.slice(cursor);
+    return out;
+  }
+
   /* ── Excluded regions: sidebar / job metadata that should NOT be scanned ── */
 
   var EXCLUDED_SELECTORS = [
@@ -362,6 +484,195 @@
   }
 
   /**
+   * True when `text` is SR's candidate-summary sidebar / profile chrome rather than
+   * the real resume PDF.  getResumeText's fullRoot fallback returns this ~1000-char
+   * boilerplate ("Candidate summary · High priority skills X/8 · Other skills X/33 ·
+   * See details · Order assessments") whenever the PDF text layer has not rendered.
+   * It sneaks past a length-only retry gate, so we detect it by content instead and
+   * force the resume wait to keep trying for the actual PDF.
+   *
+   * The markers below are SR UI strings that never appear inside a candidate's
+   * resume, so a false positive on real resume text is effectively impossible.
+   */
+  function looksLikeSrSummaryChrome(text) {
+    if (!text) return false;
+    var t = String(text);
+    var hits = 0;
+    if (/candidate summary/i.test(t)) hits++;
+    if (/\bOther skills\b|\bHigh priority skills\b/i.test(t)) hits++;
+    if (/order assessments|no assessment orders/i.test(t)) hits++;
+    if (/no tags added for this candidate/i.test(t)) hits++;
+    if (/See details\b/i.test(t) && /View Profile\b/i.test(t)) hits++;
+    return hits >= 2;
+  }
+
+  /**
+   * True when we actually read the candidate's resume PDF — i.e. we have
+   * substantial text that isn't SR's summary chrome. Used to set the note's
+   * "partial scan" honesty flag: when this is false the resume PDF never
+   * rendered, so missed keywords are uncertain (Ctrl+F couldn't see the page).
+   * Shared by the keyword and boolean paths so they flag identically.
+   */
+  function resumeWasRead(resumeText, isChrome) {
+    if (isChrome) return false;
+    if (!resumeText) return false;
+    return String(resumeText).replace(/\s+/g, "").length >= 50;
+  }
+
+  /**
+   * Nudge the resume viewer to scroll through its full height. pdf.js renders text
+   * layers lazily — only for pages near the viewport — so in a background worker tab
+   * the lower pages of a multi-page resume never produce extractable spans until
+   * scrolled into view. Scrolling every plausible resume/scroll container (across
+   * shadow roots) forces those text layers to render.
+   */
+  function nudgeResumeViewerScroll(doc) {
+    var root = doc.querySelector("#st-candidateView") || doc.body;
+    if (!root) return;
+    var selectors = ["sr-resume-viewer", "sr-candidate-resume", "sr-resume",
+      '[data-testid*="resume"]', '[class*="resume"]', ".pdfViewer", '[class*="pdfViewer"]'];
+    for (var i = 0; i < selectors.length; i++) {
+      try {
+        var els = queryDeepSelectorAll(root, null, selectors[i]);
+        for (var j = 0; j < els.length; j++) {
+          var el = els[j];
+          // Scroll the element itself and any scrollable ancestor through its height.
+          for (var up = 0, node = el; node && up < 6; up++, node = node.parentElement || (node.getRootNode && node.getRootNode().host)) {
+            try {
+              if (node.scrollHeight && node.scrollHeight > node.clientHeight + 40) {
+                node.scrollTop = node.scrollHeight;
+                node.scrollTop = 0;
+              }
+            } catch (_) {}
+          }
+          try { el.scrollIntoView({ block: "end", behavior: "instant" }); } catch (_) {}
+          try { el.scrollIntoView({ block: "start", behavior: "instant" }); } catch (_) {}
+        }
+      } catch (_) {}
+    }
+  }
+
+  /**
+   * Ask the background service worker to briefly foreground this (hidden worker) tab
+   * so pdf.js will render the resume text layer. Returns true if focus was granted
+   * (caller must then call releaseResumeRenderFocus). No-ops — and returns false —
+   * when already visible (single-tab / foreground run) or outside the extension
+   * (Node tests), so it is always safe to call.
+   */
+  function requestResumeRenderFocus(doc) {
+    try {
+      if (doc && doc.visibilityState === "visible") return Promise.resolve(false);
+      if (typeof chrome === "undefined" || !chrome.runtime || !chrome.runtime.sendMessage) {
+        return Promise.resolve(false);
+      }
+    } catch (_) { return Promise.resolve(false); }
+    function sendFocusReq() {
+      return new Promise(function (resolve) {
+        try {
+          chrome.runtime.sendMessage({ type: "srRequestResumeFocus" }, function (resp) {
+            // null result (not an explicit ok:false) means the message dropped while
+            // the MV3 worker was waking — signal a retryable miss.
+            if (chrome.runtime.lastError) { resolve(null); return; }
+            resolve(!!(resp && resp.ok));
+          });
+        } catch (_) { resolve(null); }
+      });
+    }
+    return sendFocusReq().then(function (r) {
+      if (r !== null) return r;          // got a definite answer
+      return sleep(350).then(sendFocusReq).then(function (r2) { return r2 === null ? false : r2; });
+    });
+  }
+
+  function releaseResumeRenderFocus() {
+    try {
+      if (typeof chrome === "undefined" || !chrome.runtime || !chrome.runtime.sendMessage) return;
+      chrome.runtime.sendMessage({ type: "srReleaseResumeFocus" }, function () {
+        // Touch lastError so Chrome doesn't log "unchecked runtime.lastError".
+        try { void chrome.runtime.lastError; } catch (_) {}
+      });
+    } catch (_) {}
+  }
+
+  /**
+   * Find the "Resume" / "Latest Resume" attachment link in the job-application
+   * sidebar. Clicking it opens the full resume in a new tab (the background then
+   * captures + closes it). Prefers "Latest Resume" (most recent upload).
+   */
+  function findResumeAttachmentLink(doc) {
+    var root = doc.querySelector("#st-candidateView") || doc.body;
+    if (!root) return null;
+    var areas = queryDeepSelectorAll(root, null,
+      "sr-attachments-v2, sr-attachments-container, sr-attachment-row, sr-job-application-sidebar");
+    var searchRoots = areas.length ? areas : [root];
+    var latest = null, plain = null, any = null;
+    for (var i = 0; i < searchRoots.length; i++) {
+      var links = queryDeepSelectorAll(searchRoots[i], null, "spl-link-button, a, [role='link'], button");
+      for (var j = 0; j < links.length; j++) {
+        var t = (getDeepText(links[j]) || "").replace(/\s+/g, " ").trim().toLowerCase();
+        if (t.length > 40 || t.indexOf("resume") < 0) continue;
+        any = any || links[j];
+        if (t.indexOf("latest resume") >= 0 && !latest) latest = links[j];
+        else if (/^resume\b/.test(t) && !plain) plain = links[j];
+      }
+    }
+    return latest || plain || any;
+  }
+
+  /**
+   * Fallback when the inline resume viewer never renders: open the resume attachment
+   * in a new tab (background captures its text and closes it). Returns the resume
+   * text, or "" if unavailable. Only works inside the extension (no-ops in tests).
+   */
+  async function tryAttachmentResumeFallback(doc, win, log) {
+    try {
+      if (typeof chrome === "undefined" || !chrome.runtime || !chrome.runtime.sendMessage) return "";
+      var link = findResumeAttachmentLink(doc);
+      if (!link) { log.push({ ok: false, msg: "Fallback: resume attachment link not found" }); return ""; }
+      // The MV3 service worker is usually asleep by the time this fallback fires
+      // (~30s into a slow resume phase). The FIRST sendMessage after idle commonly
+      // loses its response ("message port closed") while Chrome is still spinning the
+      // worker back up — so capture the real lastError and retry once before giving up.
+      var armErr = "";
+      function sendArm() {
+        return new Promise(function (resolve) {
+          try {
+            chrome.runtime.sendMessage({ type: "srArmResumeCapture" }, function (r) {
+              if (chrome.runtime.lastError) { armErr = chrome.runtime.lastError.message || "message channel closed"; resolve(false); return; }
+              resolve(!!(r && r.ok));
+            });
+          } catch (e) { armErr = (e && e.message) || String(e); resolve(false); }
+        });
+      }
+      var armed = await sendArm();
+      if (!armed) { await sleep(350); armErr = ""; armed = await sendArm(); } // retry once after waking the SW
+      if (!armed) { log.push({ ok: false, msg: "Fallback: could not arm background capture" + (armErr ? " (" + armErr + ")" : "") }); return ""; }
+      log.push({ ok: true, msg: "Fallback: opening resume attachment in a new tab to read the PDF" });
+      try { link.scrollIntoView({ block: "center", behavior: "instant" }); } catch (_) {}
+      try { link.click(); } catch (_) { try { dispatchClickAtElementCenter(link, win, 0.5); } catch (_2) {} }
+      var text = "";
+      for (var w = 0; w < 24000; w += 600) {
+        await sleep(600);
+        var res = await new Promise(function (resolve) {
+          try {
+            chrome.runtime.sendMessage({ type: "srGetResumeCapture" }, function (r) {
+              if (chrome.runtime.lastError) { resolve(null); return; }
+              resolve(r || null);
+            });
+          } catch (_) { resolve(null); }
+        });
+        if (res && res.done) { text = res.text || ""; break; }
+      }
+      log.push({ ok: !!(text && text.length >= 300),
+                 msg: "Fallback: resume tab returned " + (text ? text.length : 0) + " chars" });
+      return text;
+    } catch (e) {
+      log.push({ ok: false, msg: "Fallback error: " + ((e && e.message) || String(e)) });
+      return "";
+    }
+  }
+
+  /**
    * Extract the candidate header — name, title, and top-bar info that is ALWAYS
    * visible regardless of which tab is active.  This is the fastest, most reliable
    * text source on the page and catches titles like "IAM SailPoint Developer".
@@ -405,6 +716,50 @@
   }
 
   /**
+   * Extract just the candidate's name from the profile header.  Reuses the
+   * name-specific selectors from getCandidateHeaderText (shadow-piercing), and
+   * falls back to the first header chunk when no dedicated name element exists.
+   */
+  function getCandidateName(doc) {
+    var root = doc.querySelector("#st-candidateView") || doc.body;
+    if (!root) return "";
+    // Primary: SR's stable applicant-name element. The #st-applicantName id does
+    // not change across profiles, and its <spl-truncate> slot holds the full name.
+    try {
+      var applicant = null;
+      try { applicant = doc.querySelector("#st-applicantName"); } catch (_) {}
+      if (!applicant) applicant = findElementByIdDeep(doc.documentElement || doc.body, "st-applicantName");
+      if (applicant) {
+        var nameTxt = (applicant.innerText || applicant.textContent || "").replace(/\s+/g, " ").trim();
+        if (nameTxt.length >= 2 && nameTxt.length < 120) return nameTxt;
+      }
+    } catch (_) {}
+    var nameSelectors = [
+      '[class*="candidate-name"]',
+      '[class*="candidateName"]',
+      '[data-testid*="candidate-name"]',
+    ];
+    for (var i = 0; i < nameSelectors.length; i++) {
+      try {
+        var els = queryDeepSelectorAll(root, null, nameSelectors[i]);
+        for (var j = 0; j < els.length; j++) {
+          var t = (els[j].innerText || els[j].textContent || "").replace(/\s+/g, " ").trim();
+          if (t.length >= 2 && t.length < 120) return t;
+        }
+      } catch (_) {}
+    }
+    // Fallback: the first chunk of the header blob is usually the name.
+    try {
+      var header = getCandidateHeaderText(doc);
+      if (header) {
+        var first = header.split("\n\n")[0].replace(/\s+/g, " ").trim();
+        if (first.length >= 2 && first.length < 120) return first;
+      }
+    } catch (_) {}
+    return "";
+  }
+
+  /**
    * Extract text from pdf.js text layers — SR sometimes renders resumes via
    * pdf.js which overlays <span> elements on a <canvas>.  The canvas itself
    * is pixels (invisible to innerText) but the text layer spans are real DOM.
@@ -418,20 +773,27 @@
       '[class*="text-layer"] span',
       ".pdfViewer .page .textLayer span",
     ];
+    // These selectors overlap heavily (".textLayer span" ⊆ "[class*=textLayer] span"
+    // ⊆ ".pdfViewer .page .textLayer span"), so iterating each and pushing a chunk
+    // re-captured the SAME spans 2-3× and inflated occurrence counts. Collect the
+    // union of unique elements once instead.
+    var seenSpan = (typeof Set === "function") ? new Set() : null;
+    var uParts = [];
     for (var si = 0; si < selectors.length; si++) {
       try {
         // Pierce shadow roots — pdf.js text layers live inside sr-resume-viewer's shadow DOM.
         var spans = queryDeepSelectorAll(pdfRoot, null, selectors[si]);
-        if (spans.length > 20) {
-          var parts = [];
-          for (var i = 0; i < spans.length; i++) {
-            var t = (spans[i].textContent || "").trim();
-            if (t) parts.push(t);
+        for (var i = 0; i < spans.length; i++) {
+          if (seenSpan) {
+            if (seenSpan.has(spans[i])) continue;
+            seenSpan.add(spans[i]);
           }
-          if (parts.length) chunks.push(parts.join(" "));
+          var t = (spans[i].textContent || "").trim();
+          if (t) uParts.push(t);
         }
       } catch (_) {}
     }
+    if (uParts.length > 20) chunks.push(uParts.join(" "));
     try {
       var iframes = Array.from(doc.querySelectorAll("iframe"));
       for (var fi = 0; fi < iframes.length; fi++) {
@@ -439,17 +801,20 @@
           var fd = iframes[fi].contentDocument ||
                    (iframes[fi].contentWindow && iframes[fi].contentWindow.document);
           if (!fd) continue;
+          var seenSpan2 = (typeof Set === "function") ? new Set() : null;
+          var parts2 = [];
           for (var si2 = 0; si2 < selectors.length; si2++) {
             var spans2 = fd.querySelectorAll(selectors[si2]);
-            if (spans2.length > 20) {
-              var parts2 = [];
-              for (var j = 0; j < spans2.length; j++) {
-                var t2 = (spans2[j].textContent || "").trim();
-                if (t2) parts2.push(t2);
+            for (var j = 0; j < spans2.length; j++) {
+              if (seenSpan2) {
+                if (seenSpan2.has(spans2[j])) continue;
+                seenSpan2.add(spans2[j]);
               }
-              if (parts2.length) chunks.push(parts2.join(" "));
+              var t2 = (spans2[j].textContent || "").trim();
+              if (t2) parts2.push(t2);
             }
           }
+          if (parts2.length > 20) chunks.push(parts2.join(" "));
         } catch (_) {}
       }
     } catch (_) {}
@@ -616,7 +981,9 @@
         if (done) return;
         var preview = "";
         try { preview = getResumeOnlyText(doc); } catch (_) {}
-        if (preview && preview.length >= 200) finish();
+        // Resolve only on real resume text — never on SR's summary chrome, which can
+        // appear inside the resume-viewer selectors before pdf.js renders the PDF.
+        if (preview && preview.length >= 200 && !looksLikeSrSummaryChrome(preview)) finish();
       }
 
       // Immediate check — content may already be present (e.g. tab was already active).
@@ -939,6 +1306,29 @@
       if (h.count > groups[cl].count) groups[cl].count = h.count;
     }
     return order.map(function (cl) { return groups[cl]; });
+  }
+
+  /**
+   * Per-canonical occurrence counts computed from the RESUME text alone.
+   *
+   * Displayed counts ("phd (x25)") get inflated when an expansion alias such as
+   * "doctorate" matches SR's repeated profile/skill chrome. Counting against the
+   * resume only — which never contains that chrome — yields the true number of
+   * times the candidate's resume mentions the keyword.
+   *
+   * Returns a map { canonicalLower: count }, or null when there is no real resume
+   * (sparse, or SR summary chrome) so the caller falls back to the union count.
+   */
+  function countsFromResume(resumeText, keywords, canonicalMap) {
+    if (!resumeText || resumeText.length < 300) return null;
+    if (looksLikeSrSummaryChrome(resumeText)) return null;
+    var clean = normalizeForKw(collapseInlineRepeats(dedupeTextSegments(resumeText)));
+    if (!clean) return null;
+    var hits = findKeywordHits(clean, keywords).hits;
+    var deduped = deduplicateHitsByCanonical(hits, canonicalMap);
+    var map = Object.create(null);
+    for (var i = 0; i < deduped.length; i++) map[deduped[i].keyword.toLowerCase()] = deduped[i].count;
+    return map;
   }
 
   /* ── Boolean search parser (LinkedIn Recruiter–style syntax) ── */
@@ -1610,8 +2000,97 @@
     return null;
   }
 
-  function formatNoteText(hitLabels, hitCount, totalKeywords, notePrefix) {
-    return (notePrefix || "") + hitLabels.join(", ") + " - Matched " + hitCount + "/" + totalKeywords;
+  // Warning appended to notes when the resume PDF never rendered and the scan saw
+  // only SR profile/skills data — so the recruiter knows a low hit count may be
+  // incomplete rather than a true negative.
+  var PARTIAL_SCAN_WARNING = "⚠ Resume PDF not read — partial scan (profile data only)";
+
+  function formatNoteText(hitLabels, hitCount, totalKeywords, notePrefix, candidateName, profileUrl, partialScan) {
+    var body = (hitCount === 0 || !hitLabels || !hitLabels.length)
+      ? "No keyword tagged"
+      : hitLabels.join(", ");
+    var summary = (notePrefix || "") + body + " - Matched " + hitCount + "/" + totalKeywords;
+    if (partialScan) summary += "\n" + PARTIAL_SCAN_WARNING;
+    // SR notes are plain-text, so name + URL go in as a plain header line (no markup).
+    var header = [candidateName, profileUrl].filter(function (p) { return p; }).join(" | ");
+    return header ? header + "\n" + summary : summary;
+  }
+
+  function escapeHtml(s) {
+    return String(s == null ? "" : s)
+      .replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
+  }
+
+  /**
+   * Rich-text variant of formatNoteText: the profile URL becomes an "SR Profile"
+   * hyperlink instead of a bare URL. Used ONLY when the notes field is a
+   * contenteditable rich editor — a plain <textarea> cannot hold an anchor.
+   */
+  function formatNoteHtml(hitLabels, hitCount, totalKeywords, notePrefix, candidateName, profileUrl, partialScan) {
+    var body = (hitCount === 0 || !hitLabels || !hitLabels.length)
+      ? "No keyword tagged"
+      : hitLabels.join(", ");
+    var summary = escapeHtml((notePrefix || "") + body + " - Matched " + hitCount + "/" + totalKeywords);
+    if (partialScan) summary += "<br>" + escapeHtml(PARTIAL_SCAN_WARNING);
+    var parts = [];
+    if (candidateName) parts.push(escapeHtml(candidateName));
+    if (profileUrl) parts.push('<a href="' + escapeHtml(profileUrl) + '">SR Profile</a>');
+    var header = parts.join(" | ");
+    return header ? header + "<br>" + summary : summary;
+  }
+
+  /* ── Note-save confirmation: detect the note actually rendering in the feed ── */
+
+  function _normNoteText(s) {
+    return String(s == null ? "" : s).replace(/\s+/g, " ").trim().toLowerCase();
+  }
+
+  function _countOccur(hay, needle) {
+    if (!needle) return 0;
+    var n = 0, i = 0;
+    while ((i = hay.indexOf(needle, i)) >= 0) { n++; i += needle.length; }
+    return n;
+  }
+
+  /**
+   * Distinctive, render-stable marker for a just-composed note: the matched
+   * keyword body (or "No keyword tagged"), normalised and capped. The matched
+   * keyword list is profile-specific, so its appearance in the notes feed is a
+   * reliable "this note saved and rendered" signal — unlike a URL substring or
+   * the compose field clearing, neither of which fires for SR's div editor.
+   */
+  function noteConfirmMarker(hitLabels, hitCount) {
+    var body = (!hitCount || !hitLabels || !hitLabels.length)
+      ? "No keyword tagged"
+      : hitLabels.join(", ");
+    return _normNoteText(body).slice(0, 60);
+  }
+
+  /**
+   * Copies of `marker` rendered in the notes feed, EXCLUDING the compose box.
+   *
+   * Both arguments are .textContent (never textarea .value): for a
+   * contenteditable editor the live note text lives in textContent of both the
+   * section and the input, so they cancel; for a <textarea> the live value is in
+   * neither textContent, so nothing is double-counted. Comparing this delta
+   * before vs after Post tells us a NEW note element appeared — which is exactly
+   * what a recruiter sees when a note saves.
+   */
+  function feedDeltaCount(sectionTextContent, inputTextContent, marker) {
+    if (!marker) return 0;
+    var sec = _countOccur(_normNoteText(sectionTextContent), marker);
+    var inp = _countOccur(_normNoteText(inputTextContent), marker);
+    var d = sec - inp;
+    return d > 0 ? d : 0;
+  }
+
+  function feedCopiesOfNote(doc, win, marker, inputEl) {
+    var sec = getNotesSection(doc) || doc.body || doc.documentElement;
+    var secText = "";
+    try { secText = (sec && sec.textContent) || ""; } catch (_) {}
+    var inText = "";
+    try { inText = (inputEl && inputEl.textContent) || ""; } catch (_) {}
+    return feedDeltaCount(secText, inText, marker);
   }
 
   /**
@@ -1861,8 +2340,19 @@
         var entries = list.getEntries();
         for (var i = 0; i < entries.length; i++) {
           var e = entries[i];
-          if ((e.initiatorType === "fetch" || e.initiatorType === "xmlhttprequest") &&
-              e.name && e.name.toLowerCase().indexOf("note") >= 0) {
+          var it = e.initiatorType;
+          if (it !== "fetch" && it !== "xmlhttprequest" && it !== "beacon") continue;
+          var nm = (e.name || "").toLowerCase();
+          // SR posts notes through a generic / GraphQL endpoint, so the old
+          // indexOf("note") filter never matched. Match the write-ish endpoints
+          // SR actually uses while excluding static assets & 3rd-party telemetry.
+          var looksSave = nm.indexOf("note") >= 0 || nm.indexOf("comment") >= 0 ||
+                          nm.indexOf("activity") >= 0 || nm.indexOf("timeline") >= 0 ||
+                          nm.indexOf("message") >= 0 || nm.indexOf("graphql") >= 0 ||
+                          nm.indexOf("mutation") >= 0;
+          var noise = /(googleapis|google-analytics|googletagmanager|doubleclick|segment\.|sentry|datadog|amplitude|mixpanel|hotjar|fullstory|optimizely|launchdarkly|telemetry|analytics)/.test(nm) ||
+                      /\.(png|jpe?g|gif|svg|webp|woff2?|ttf|css|js|map)(\?|$)/.test(nm);
+          if (looksSave && !noise) {
             try { obs.disconnect(); } catch (_) {}
             resolve("api-done");
             return;
@@ -1884,7 +2374,8 @@
     };
   }
 
-  async function postKeywordHitsToNotes(doc, win, hitLabels, hitCount, totalKeywords, log, notePrefix) {
+  async function postKeywordHitsToNotes(doc, win, hitLabels, hitCount, totalKeywords, log, notePrefix, opts) {
+    var partialScan = !!(opts && opts.partialScan);
     // Single combined walk to collect input + noteToSelf state + postBtn
     var ctx = findNotesContext(doc, win);
     var input = ctx.input;
@@ -1921,11 +2412,39 @@
       if (ctx.input) input = ctx.input;  // textarea may have been remounted by SR
     }
 
-    var noteText = formatNoteText(hitLabels, hitCount, totalKeywords, notePrefix);
-    setNativeInputValue(input, noteText);
+    var candidateName = "";
+    try { candidateName = getCandidateName(doc); } catch (_) {}
+    var profileUrl = "";
+    try { profileUrl = (doc.location && doc.location.href) || ""; } catch (_) {}
+    var noteText = formatNoteText(hitLabels, hitCount, totalKeywords, notePrefix, candidateName, profileUrl, partialScan);
+    var itag = (input.tagName || "").toLowerCase();
+    var isRichEditor = (itag !== "textarea" && itag !== "input");
+
+    // Rich-text editor + a profile URL → insert a real "SR Profile" hyperlink via
+    // insertHTML. Textareas can't hold anchors, so they fall through to plain text.
+    var usedRichHtml = false;
+    if (isRichEditor && profileUrl) {
+      try {
+        var ownerDoc = input.ownerDocument || doc;
+        var ownerWin = ownerDoc.defaultView || win;
+        input.focus();
+        var rsel = ownerWin.getSelection && ownerWin.getSelection();
+        if (rsel && rsel.selectAllChildren) rsel.selectAllChildren(input);
+        var noteHtml = formatNoteHtml(hitLabels, hitCount, totalKeywords, notePrefix, candidateName, profileUrl, partialScan);
+        usedRichHtml = ownerDoc.execCommand("insertHTML", false, noteHtml);
+      } catch (_) {}
+      if (usedRichHtml) {
+        try { input.dispatchEvent(new InputEvent("input", { inputType: "insertFromPaste", bubbles: true, composed: true })); } catch (_) {}
+        try { input.dispatchEvent(new Event("change", { bubbles: true, composed: true })); } catch (_) {}
+        log.push({ ok: true, msg: "Notes: inserted rich text with 'SR Profile' hyperlink" });
+      } else {
+        log.push({ ok: true, msg: "Notes: rich insertHTML unavailable — falling back to plain text" });
+      }
+    }
+
+    if (!usedRichHtml) setNativeInputValue(input, noteText);
     await sleep(200);
 
-    var itag = (input.tagName || "").toLowerCase();
     if (itag === "textarea" || itag === "input") {
       var curVal = "";
       try { curVal = input.value || ""; } catch (_) {}
@@ -1998,38 +2517,116 @@
     // so the browser doesn't cancel the in-flight XHR when we navigate to the next profile.
     var noteSaveWatcher = beginWatchForNoteSave(win);
 
+    // The matched-keyword body is profile-specific; record how many copies of it
+    // already render in the feed (excluding the compose box) BEFORE we post, so an
+    // increase afterwards proves a new note element appeared.
+    var noteMarker = noteConfirmMarker(hitLabels, hitCount);
+    var baselineFeed = feedCopiesOfNote(doc, win, noteMarker, input);
+
     // Click Post exactly once — never retry. Retrying risks posting blank notes when SR
     // is slow to clear the textarea after a successful submission.
     singleClick(postBtn, win, "shadow");
-    var confirmed = false;
-    for (var pw = 0; pw < 4500; pw += 300) {
+
+    // Confirm the save by racing THREE signals — the old code relied only on the
+    // textarea clearing (the div editor never clears detectably) and a network URL
+    // containing "note" (SR's endpoint doesn't), so every post logged "UNCONFIRMED"
+    // even though it saved. The authoritative human-equivalent signal is the note
+    // appearing in the feed:
+    //   (a) the note text rendering in the notes feed (works for div + textarea),
+    //   (b) SR's note-save API response on the network, and
+    //   (c) the compose field clearing or unmounting.
+    var apiDone = false;
+    noteSaveWatcher.wait(7000).then(function (r) { if (r === "api-done") apiDone = true; });
+
+    var confirmed = false, confirmReason = "";
+    for (var pw = 0; pw < 7000; pw += 300) {
       await sleep(300);
+      try {
+        if (feedCopiesOfNote(doc, win, noteMarker, input) > baselineFeed) {
+          confirmed = true; confirmReason = "rendered in feed"; break;
+        }
+      } catch (_) {}
+      if (apiDone) { confirmed = true; confirmReason = "save API"; break; }
       var postCheckVal = "";
       try {
         postCheckVal = (itag === "textarea" || itag === "input") ? (input.value || "") : (input.textContent || "");
       } catch (_) {
         // Element detached — SR unmounted the form after submission.
-        confirmed = true;
-        break;
+        confirmed = true; confirmReason = "compose unmounted"; break;
       }
-      if (!postCheckVal || postCheckVal.length < 5) { confirmed = true; break; }
+      if (!postCheckVal || postCheckVal.length < 5) { confirmed = true; confirmReason = "compose cleared"; break; }
     }
 
-    // If textarea didn't clear within 4.5 s, assume the click landed anyway —
-    // SR sometimes keeps text briefly. Returning false here would cause the
-    // caller to log note✗ and potentially requeue, which is worse than a
-    // missed confirmation. This is logged as "UNCONFIRMED" so it appears in
-    // diagLog and the user can spot it in the popup.
-    if (!confirmed) {
-      log.push({ ok: true, msg: "Notes: Post clicked — UNCONFIRMED (textarea did not clear in 4.5s, may not have saved if page closed too soon)" });
-      await noteSaveWatcher.wait(4000);
+    if (confirmed) {
+      // If we confirmed via the UI before the API response landed, wait for the
+      // actual save to finish so the caller's navigation doesn't cancel the XHR.
+      if (!apiDone) {
+        var late = await noteSaveWatcher.wait(2500);
+        if (late === "api-done") apiDone = true;
+      }
+      log.push({ ok: true, msg: "Notes: confirmed posted (" + hitCount + " matches via " + confirmReason + (apiDone ? " + save API" : "") + ")" });
       return true;
     }
 
-    // Wait for the actual SR API response (not just the optimistic UI clear).
-    await noteSaveWatcher.wait(3000);
-    log.push({ ok: true, msg: "Notes: confirmed posted (" + hitCount + " matches)" });
+    // Genuinely unconfirmed: the note never rendered, the save API never fired, and
+    // the field kept its text. Return true anyway (returning false risks the caller
+    // requeuing and double-posting), but log ok:false so it's visible in diagnostics.
+    log.push({ ok: false, msg: "Notes: Post clicked but UNCONFIRMED — note did not appear in feed, no save-API response, field retained text (note may not have saved)" });
     return true;
+  }
+
+  /* ── Per-profile diagnostics: capture extracted text + matched/missed keywords ── */
+
+  var DIAG_KEY_PREFIX = "lastRunDiag_";
+  var DIAG_MAX_ENTRIES = 20;
+  var DIAG_TEXT_CAP = 50 * 1024;      // 50 KB — full normalized allText
+  var DIAG_SOURCE_CAP = 15 * 1024;    // 15 KB per individual source
+
+  function capText(s, maxChars) {
+    if (s == null) return "";
+    s = String(s);
+    if (s.length <= maxChars) return s;
+    var extra = s.length - maxChars;
+    return s.slice(0, maxChars) + "\n...[truncated +" + extra + " chars]";
+  }
+
+  /**
+   * Fire-and-forget save of a per-profile diagnostic entry to chrome.storage.local.
+   * Keyed by `lastRunDiag_<timestamp>`; prunes to the most recent DIAG_MAX_ENTRIES.
+   * Silently no-ops when chrome.storage is unavailable (Node test harness).
+   */
+  function saveProfileDiag(entry) {
+    try {
+      if (typeof chrome === "undefined" || !chrome.storage || !chrome.storage.local) return;
+    } catch (_) { return; }
+    var key = DIAG_KEY_PREFIX + entry.timestamp;
+    var payload = {};
+    payload[key] = entry;
+    try {
+      chrome.storage.local.set(payload, function () {
+        try { chrome.runtime && chrome.runtime.lastError; } catch (_) {}
+        try {
+          chrome.storage.local.get(null, function (all) {
+            try { chrome.runtime && chrome.runtime.lastError; } catch (_) {}
+            if (!all) return;
+            var keys = [];
+            for (var k in all) {
+              if (Object.prototype.hasOwnProperty.call(all, k) && k.indexOf(DIAG_KEY_PREFIX) === 0) keys.push(k);
+            }
+            // Descending by timestamp suffix — newest first.
+            keys.sort(function (a, b) {
+              var ta = parseInt(a.slice(DIAG_KEY_PREFIX.length), 10) || 0;
+              var tb = parseInt(b.slice(DIAG_KEY_PREFIX.length), 10) || 0;
+              return tb - ta;
+            });
+            if (keys.length > DIAG_MAX_ENTRIES) {
+              var toRemove = keys.slice(DIAG_MAX_ENTRIES);
+              try { chrome.storage.local.remove(toRemove, function () { try { chrome.runtime && chrome.runtime.lastError; } catch (_) {} }); } catch (_) {}
+            }
+          });
+        } catch (_) {}
+      });
+    } catch (_) {}
   }
 
   /* ── Core: run keyword triage on a single profile page ── */
@@ -2051,10 +2648,11 @@
 
     var kwMeta = (typeof resolveKeywordsWithMeta === "function")
       ? resolveKeywordsWithMeta(config.keywords || "")
-      : { keywords: resolveKeywords(config.keywords || ""), canonicalMap: null, userCount: null };
+      : { keywords: resolveKeywords(config.keywords || ""), canonicalMap: null, userCount: null, userKeywordsList: [] };
     var keywords = kwMeta.keywords;
     var canonicalMap = kwMeta.canonicalMap;
     var userKeywordCount = kwMeta.userCount != null ? kwMeta.userCount : keywords.length;
+    var userKeywordsList = kwMeta.userKeywordsList || [];
     var postToNotes = !!config.postToNotes;
 
     if (!keywords.length) {
@@ -2075,6 +2673,12 @@
     try { headerText = getCandidateHeaderText(doc); } catch (_) {}
     if (headerText) textParts.push(headerText);
 
+    // Briefly foreground this worker tab so pdf.js renders the resume text layer
+    // (it's paused while the tab is hidden). Released once resume extraction is done.
+    var gotRenderFocus = false;
+    try { gotRenderFocus = await requestResumeRenderFocus(doc); } catch (_) {}
+    if (gotRenderFocus) { log.push({ ok: true, msg: "Resume: foregrounded worker tab so pdf.js can render" }); await sleep(250); }
+
     // MutationObserver-based resume wait: start the waiter BEFORE clicking the resume
     // tab so the observer is already watching when SR's SPA mounts the PDF viewer.
     // Resolves as soon as ≥200 chars of resume-viewer text appears (or on timeout).
@@ -2084,24 +2688,55 @@
     try { resumeText = await resumeWaiter; } catch (_) {}
     if (!resumeText) { try { resumeText = getResumeText(doc); } catch (_) {} }
     // pdf.js text layer fallback — canvas-rendered PDFs have an invisible text
-    // layer overlay whose spans contain the real text.
-    if (!resumeText || resumeText.length < 200) {
-      try {
-        var pdfText = getPdfTextLayerText(doc);
-        if (pdfText.length > (resumeText || "").length) resumeText = pdfText;
-      } catch (_) {}
-    }
-    // Retry once if resume is sparse — background tabs render PDFs slower.
-    if (!resumeText || resumeText.length < 1000) {
-      await sleep(4000);
-      var retryResume = "";
-      try { retryResume = getResumeText(doc); } catch (_) {}
-      if (!retryResume || retryResume.length < (resumeText || "").length) {
-        try { var retryPdf = getPdfTextLayerText(doc); if (retryPdf.length > (retryResume || "").length) retryResume = retryPdf; } catch (_) {}
+    // layer overlay whose spans contain the real text. Always check regardless of
+    // resumeText length: getResumeText's fullRoot fallback can return SR sidebar
+    // boilerplate (~982 chars) that satisfies the old length < 200 gate while
+    // containing no actual resume content.
+    try {
+      var pdfText = getPdfTextLayerText(doc);
+      if (pdfText.length > (resumeText || "").length) resumeText = pdfText;
+    } catch (_) {}
+    // Retry if the resume is sparse OR is actually SR's summary chrome (the
+    // ~1000-char sidebar boilerplate that masquerades as a resume and sneaks past a
+    // length-only gate — see looksLikeSrSummaryChrome). The PDF text layer often
+    // hasn't rendered yet in a background worker tab, so re-activate the resume tab,
+    // scroll the viewer to force pdf.js to render every page, and poll the clean
+    // resume-only signal until real (non-chrome) text appears.
+    var resumeIsChrome = looksLikeSrSummaryChrome(resumeText);
+    if (!resumeText || resumeText.length < 1000 || resumeIsChrome) {
+      if (resumeIsChrome) {
+        log.push({ ok: false, msg: "Resume: captured SR summary chrome, not the PDF — re-activating resume tab and waiting for text layer" });
       }
-      if (retryResume && retryResume.length > (resumeText || "").length) {
-        resumeText = retryResume;
-        log.push({ ok: true, msg: "Resume retry: recovered " + resumeText.length + " chars (background tab was slow)" });
+      for (var rwait = 0; rwait < 16000; rwait += 1500) {
+        try { await ensureResumeTabActive(doc, win); } catch (_) {}
+        try { nudgeResumeViewerScroll(doc); } catch (_) {}
+        await sleep(1500);
+        var retryResume = "";
+        try { retryResume = getResumeText(doc); } catch (_) {}
+        try { var retryPdf = getPdfTextLayerText(doc); if (retryPdf.length > (retryResume || "").length) retryResume = retryPdf; } catch (_) {}
+        var retryIsChrome = looksLikeSrSummaryChrome(retryResume);
+        // Prefer real resume text; only overwrite chrome with chrome if it's longer.
+        if (retryResume && retryResume.length > (resumeText || "").length &&
+            (!retryIsChrome || resumeIsChrome)) {
+          resumeText = retryResume;
+          resumeIsChrome = retryIsChrome;
+        }
+        if (resumeText && resumeText.length >= 500 && !resumeIsChrome) {
+          log.push({ ok: true, msg: "Resume retry: recovered " + resumeText.length + " chars of real PDF text after re-activating resume tab" });
+          break;
+        }
+      }
+      // Last resort: open the resume attachment in a new tab and read it there.
+      if (resumeIsChrome) {
+        var fbText = await tryAttachmentResumeFallback(doc, win, log);
+        if (fbText && fbText.length >= 300 && !looksLikeSrSummaryChrome(fbText)) {
+          resumeText = fbText;
+          resumeIsChrome = false;
+          log.push({ ok: true, msg: "Resume: recovered via attachment fallback (" + fbText.length + " chars)" });
+        }
+      }
+      if (resumeIsChrome) {
+        log.push({ ok: false, msg: "Resume: PDF text layer never rendered — scan limited to SR profile/skills data (resume-only keywords may be missed)" });
       }
     }
     log.push({ ok: !!(resumeText && resumeText.length >= 50),
@@ -2110,9 +2745,33 @@
                ms: Math.round(performance.now() - _t0) });
     if (resumeText) textParts.push(resumeText);
 
+    // Full-page shadow-DOM scan while resume tab is still active. Catches resume
+    // content rendered in shadow components not matched by getResumeText's selector
+    // list. Must run before ensureProfileTabActive — SR's SPA unmounts the resume
+    // viewer when switching tabs, so this text is unavailable afterward.
+    var resumeTabScan = "";
+    try { resumeTabScan = getFullPageText(doc); } catch (_) {}
+    // Resume PDF + full-page scan captured — hand foreground back to the next worker
+    // (or restore the user's tab if none are waiting).
+    if (gotRenderFocus) { releaseResumeRenderFocus(); gotRenderFocus = false; }
+    if (resumeTabScan && resumeTabScan.length > (resumeText || "").length) {
+      textParts.push(resumeTabScan);
+      log.push({ ok: true, msg: "Resume tab full-page: " + resumeTabScan.length + " chars" });
+    }
+
     var _t1 = performance.now();
     try { await ensureProfileTabActive(doc, win); } catch (_) {}
-    await sleep(300);
+    // Adaptive wait: SR fetches profile content (skills, work history) asynchronously
+    // after the tab click. Poll until getProfileOverviewText reaches 600 chars — a
+    // reliable signal the async load finished — or bail after 1500 ms.
+    // Combined with the 500 ms sleep inside ensureProfileTabActive this gives up to
+    // 2 s total for the profile panel to render before we extract text.
+    var _ppw = 0;
+    while (_ppw < 1500) {
+      await sleep(250);
+      _ppw += 250;
+      try { if (getProfileOverviewText(doc).length >= 600) break; } catch (_) {}
+    }
 
     var profileText = "";
     try { profileText = getProfileOverviewText(doc); } catch (_) {}
@@ -2150,6 +2809,11 @@
       allText = fullPage;
     }
 
+    var _preDedupLen = allText.length;
+    allText = dedupeTextSegments(allText);
+    if (allText.length < _preDedupLen) {
+      log.push({ ok: true, msg: "Dedup: removed " + (_preDedupLen - allText.length) + " duplicate chars (" + _preDedupLen + " → " + allText.length + ") for accurate counts" });
+    }
     allText = normalizeForKw(allText);
     var excludedKw = "";
     try { excludedKw = getExcludedText(doc); } catch (_) {}
@@ -2160,6 +2824,32 @@
 
     if (textLen < 50) {
       log.push({ ok: false, msg: "Very little text found on page — resume may not have loaded." });
+      try {
+        saveProfileDiag({
+          schemaVersion: 1, type: "keyword", timestamp: Date.now(),
+          profileUrl: (function () { try { return doc.location.href; } catch (_) { return ""; } })(),
+          userInput: String(config.keywords || ""),
+          userKeywords: userKeywordsList.slice(),
+          expandedKeywords: keywords.slice(),
+          matchedUserKeywords: [],
+          missedUserKeywords: userKeywordsList.slice(),
+          textSources: {
+            header: capText(headerText || "", DIAG_SOURCE_CAP),
+            resume: capText(resumeText || "", DIAG_SOURCE_CAP),
+            profile: capText(profileText || "", DIAG_SOURCE_CAP),
+            screening: capText(screeningText || "", DIAG_SOURCE_CAP),
+            fullPage: capText(fullPage || "", DIAG_SOURCE_CAP),
+          },
+          extractedText: capText(allText, DIAG_TEXT_CAP),
+          textStats: {
+            headerLen: (headerText || "").length, resumeLen: (resumeText || "").length,
+            profileLen: (profileText || "").length, screeningLen: (screeningText || "").length,
+            fullPageLen: (fullPage || "").length, totalLen: textLen,
+          },
+          durationMs: Math.round(performance.now() - _t0),
+          log: log.slice(),
+        });
+      } catch (_) {}
       return { log: log, moved: false, skipped: true, matchedKeywords: [], hitCount: 0,
                textStats: { headerLen: (headerText||"").length, resumeLen: 0, profileLen: 0, totalLen: 0 } };
     }
@@ -2167,10 +2857,21 @@
     var _t2 = performance.now();
     var result = findKeywordHits(allText, keywords);
     var dedupedHits = deduplicateHitsByCanonical(result.hits, canonicalMap);
+    // Displayed counts come from the RESUME only (when we have a real one) so an
+    // expansion alias like "doctorate" matching SR's repeated profile/skill chrome
+    // doesn't inflate e.g. "phd (x25)". Presence / Matched X/Y still uses the full
+    // union below, so a keyword found only in profile data is still flagged.
+    var countMap = countsFromResume(resumeText, keywords, canonicalMap);
     var hitLabels = dedupedHits.map(function (h) {
-      return h.count > 1 ? h.keyword + " (x" + h.count + ")" : h.keyword;
+      var c = countMap ? countMap[h.keyword.toLowerCase()] : undefined;
+      if (c == null) c = h.count;   // matched outside the resume — keep union count
+      return c > 1 ? h.keyword + " (x" + c + ")" : h.keyword;
     });
     var hitCount = dedupedHits.length;
+    var matchedUserKw = dedupedHits.map(function (h) { return h.keyword; });
+    var matchedLowerMap = {};
+    for (var _mi = 0; _mi < matchedUserKw.length; _mi++) matchedLowerMap[matchedUserKw[_mi].toLowerCase()] = true;
+    var missedUserKw = userKeywordsList.filter(function (k) { return !matchedLowerMap[k.toLowerCase()]; });
 
     log.push({ ok: true, msg: "Matched " + hitCount + "/" + userKeywordCount + " keywords: " + (hitLabels.length ? hitLabels.join(", ") : "(none)"),
                ms: Math.round(performance.now() - _t2) });
@@ -2182,29 +2883,58 @@
 
     var notesPosted = false;
     var _t3 = performance.now();
-    // Prepare notes only when there are hits — avoids 1-3s UI work on non-matching profiles
-    if (postToNotes && hitCount > 0) {
+    // Post when there are hits, OR when zero hits but real text was extracted (so a
+    // "No keyword tagged" note is recorded). Skip on extraction failures (textLen < 200)
+    // to avoid mislabelling a profile whose resume never loaded as having no keywords.
+    var shouldPostNote = postToNotes && (hitCount > 0 || textLen >= 200);
+    if (shouldPostNote) {
       try { await prepareNotesSection(doc, win, log); } catch (_) {}
       try {
-        notesPosted = await postKeywordHitsToNotes(doc, win, hitLabels, hitCount, userKeywordCount, log);
+        notesPosted = await postKeywordHitsToNotes(doc, win, hitLabels, hitCount, userKeywordCount, log, "", { partialScan: !resumeWasRead(resumeText, resumeIsChrome) });
       } catch (e) {
         log.push({ ok: false, msg: "Notes post error: " + ((e && e.message) || String(e)) });
       }
     }
 
     var _tNotes = Math.round(performance.now() - _t3);
-    if (postToNotes && hitCount > 0) {
+    if (shouldPostNote) {
       log.push({ ok: notesPosted, msg: "Notes phase: " + (notesPosted ? "posted" : "failed"), ms: _tNotes });
     }
 
     var notesFailReason = "";
-    if (!notesPosted && postToNotes && hitCount > 0) {
+    if (!notesPosted && shouldPostNote) {
       for (var nfi = log.length - 1; nfi >= 0; nfi--) {
         if (!log[nfi].ok && log[nfi].msg) { notesFailReason = log[nfi].msg; break; }
       }
     }
 
     var _totalMs = Math.round(performance.now() - _t0);
+    try {
+      saveProfileDiag({
+        schemaVersion: 1, type: "keyword", timestamp: Date.now(),
+        profileUrl: (function () { try { return doc.location.href; } catch (_) { return ""; } })(),
+        userInput: String(config.keywords || ""),
+        userKeywords: userKeywordsList.slice(),
+        expandedKeywords: keywords.slice(),
+        matchedUserKeywords: matchedUserKw,
+        missedUserKeywords: missedUserKw,
+        textSources: {
+          header: capText(headerText || "", DIAG_SOURCE_CAP),
+          resume: capText(resumeText || "", DIAG_SOURCE_CAP),
+          profile: capText(profileText || "", DIAG_SOURCE_CAP),
+          screening: capText(screeningText || "", DIAG_SOURCE_CAP),
+          fullPage: capText(fullPage || "", DIAG_SOURCE_CAP),
+        },
+        extractedText: capText(allText, DIAG_TEXT_CAP),
+        textStats: {
+          headerLen: (headerText || "").length, resumeLen: (resumeText || "").length,
+          profileLen: (profileText || "").length, screeningLen: (screeningText || "").length,
+          fullPageLen: (fullPage || "").length, totalLen: textLen,
+        },
+        durationMs: _totalMs,
+        log: log.slice(),
+      });
+    } catch (_) {}
     return { log: log, moved: false, skipped: false, matchedKeywords: hitLabels, hitCount: hitCount,
              notesPosted: notesPosted, notesFailReason: notesFailReason, totalMs: _totalMs,
              textStats: { headerLen: (headerText||"").length, resumeLen: (resumeText||"").length,
@@ -2212,6 +2942,7 @@
   }
 
   async function runBooleanTriageWithDoc(doc, win, config, options, log) {
+    var _tBool0 = performance.now();
     var postToNotes = !!config.postToNotes;
     var booleanQueryRaw = String(config.booleanQuery || "").trim();
     var opens = (booleanQueryRaw.match(/\(/g) || []).length;
@@ -2261,24 +2992,79 @@
     try { headerText = getCandidateHeaderText(doc); } catch (_) {}
     if (headerText) textParts.push(headerText);
 
+    // Briefly foreground this worker tab so pdf.js renders the resume text layer.
+    var gotRenderFocusBool = false;
+    try { gotRenderFocusBool = await requestResumeRenderFocus(doc); } catch (_) {}
+    if (gotRenderFocusBool) { log.push({ ok: true, msg: "Resume: foregrounded worker tab so pdf.js can render" }); await sleep(250); }
+
     var resumeText = "";
     var resumeWaiterBool = makeResumeTextWaiter(doc, Math.max(resumeWaitMs, 12000));
     try { await ensureResumeTabActive(doc, win); } catch (_) {}
     try { resumeText = await resumeWaiterBool; } catch (_) {}
     if (!resumeText) { try { resumeText = getResumeText(doc); } catch (_) {} }
-    if (!resumeText || resumeText.length < 200) {
-      try {
-        var pdfTextBool = getPdfTextLayerText(doc);
-        if (pdfTextBool.length > (resumeText || "").length) resumeText = pdfTextBool;
-      } catch (_) {}
+    try {
+      var pdfTextBool = getPdfTextLayerText(doc);
+      if (pdfTextBool.length > (resumeText || "").length) resumeText = pdfTextBool;
+    } catch (_) {}
+    // Same chrome-aware retry as the keyword path: if we only captured SR's summary
+    // sidebar (not the real PDF), re-activate the resume tab, scroll the viewer to
+    // force pdf.js rendering, and poll until real resume text appears.
+    var resumeIsChromeBool = looksLikeSrSummaryChrome(resumeText);
+    if (!resumeText || resumeText.length < 1000 || resumeIsChromeBool) {
+      if (resumeIsChromeBool) {
+        log.push({ ok: false, msg: "Resume: captured SR summary chrome, not the PDF — re-activating resume tab and waiting for text layer" });
+      }
+      for (var rwaitB = 0; rwaitB < 16000; rwaitB += 1500) {
+        try { await ensureResumeTabActive(doc, win); } catch (_) {}
+        try { nudgeResumeViewerScroll(doc); } catch (_) {}
+        await sleep(1500);
+        var retryResumeB = "";
+        try { retryResumeB = getResumeText(doc); } catch (_) {}
+        try { var retryPdfB = getPdfTextLayerText(doc); if (retryPdfB.length > (retryResumeB || "").length) retryResumeB = retryPdfB; } catch (_) {}
+        var retryIsChromeB = looksLikeSrSummaryChrome(retryResumeB);
+        if (retryResumeB && retryResumeB.length > (resumeText || "").length &&
+            (!retryIsChromeB || resumeIsChromeBool)) {
+          resumeText = retryResumeB;
+          resumeIsChromeBool = retryIsChromeB;
+        }
+        if (resumeText && resumeText.length >= 500 && !resumeIsChromeBool) {
+          log.push({ ok: true, msg: "Resume retry: recovered " + resumeText.length + " chars of real PDF text after re-activating resume tab" });
+          break;
+        }
+      }
+      if (resumeIsChromeBool) {
+        var fbTextB = await tryAttachmentResumeFallback(doc, win, log);
+        if (fbTextB && fbTextB.length >= 300 && !looksLikeSrSummaryChrome(fbTextB)) {
+          resumeText = fbTextB;
+          resumeIsChromeBool = false;
+          log.push({ ok: true, msg: "Resume: recovered via attachment fallback (" + fbTextB.length + " chars)" });
+        }
+      }
+      if (resumeIsChromeBool) {
+        log.push({ ok: false, msg: "Resume: PDF text layer never rendered — scan limited to SR profile/skills data (resume-only terms may be missed)" });
+      }
     }
     log.push({ ok: !!(resumeText && resumeText.length >= 50),
                msg: "Resume: " + (resumeText ? resumeText.length : 0) + " chars" +
                     (resumeText && resumeText.length < 200 ? " (sparse)" : "") });
     if (resumeText) textParts.push(resumeText);
 
+    var resumeTabScanBool = "";
+    try { resumeTabScanBool = getFullPageText(doc); } catch (_) {}
+    // Resume PDF + full-page scan captured — hand foreground back.
+    if (gotRenderFocusBool) { releaseResumeRenderFocus(); gotRenderFocusBool = false; }
+    if (resumeTabScanBool && resumeTabScanBool.length > (resumeText || "").length) {
+      textParts.push(resumeTabScanBool);
+      log.push({ ok: true, msg: "Resume tab full-page: " + resumeTabScanBool.length + " chars" });
+    }
+
     try { await ensureProfileTabActive(doc, win); } catch (_) {}
-    await sleep(300);
+    var _ppwB = 0;
+    while (_ppwB < 1500) {
+      await sleep(250);
+      _ppwB += 250;
+      try { if (getProfileOverviewText(doc).length >= 600) break; } catch (_) {}
+    }
 
     var profileText = "";
     try { profileText = getProfileOverviewText(doc); } catch (_) {}
@@ -2312,6 +3098,11 @@
       allText = fullPage;
     }
 
+    var _preDedupLenB = allText.length;
+    allText = dedupeTextSegments(allText);
+    if (allText.length < _preDedupLenB) {
+      log.push({ ok: true, msg: "Dedup: removed " + (_preDedupLenB - allText.length) + " duplicate chars (" + _preDedupLenB + " → " + allText.length + ") for accurate counts" });
+    }
     allText = normalizeForKw(allText);
     var excludedBool = "";
     try { excludedBool = getExcludedText(doc); } catch (_) {}
@@ -2321,6 +3112,32 @@
 
     if (textLen < 50) {
       log.push({ ok: false, msg: "Very little text found on page — resume may not have loaded." });
+      try {
+        saveProfileDiag({
+          schemaVersion: 1, type: "boolean", timestamp: Date.now(),
+          profileUrl: (function () { try { return doc.location.href; } catch (_) { return ""; } })(),
+          userInput: booleanQueryRaw,
+          userKeywords: positiveTerms.slice(),
+          expandedKeywords: [],
+          matchedUserKeywords: [],
+          missedUserKeywords: positiveTerms.slice(),
+          textSources: {
+            header: capText(headerText || "", DIAG_SOURCE_CAP),
+            resume: capText(resumeText || "", DIAG_SOURCE_CAP),
+            profile: capText(profileText || "", DIAG_SOURCE_CAP),
+            screening: capText(screeningText || "", DIAG_SOURCE_CAP),
+            fullPage: capText(fullPage || "", DIAG_SOURCE_CAP),
+          },
+          extractedText: capText(allText, DIAG_TEXT_CAP),
+          textStats: {
+            headerLen: (headerText || "").length, resumeLen: (resumeText || "").length,
+            profileLen: (profileText || "").length, screeningLen: (screeningText || "").length,
+            fullPageLen: (fullPage || "").length, totalLen: textLen,
+          },
+          durationMs: Math.round(performance.now() - _tBool0),
+          log: log.slice(),
+        });
+      } catch (_) {}
       return { log: log, moved: false, skipped: true, matchedKeywords: [], hitCount: 0,
                textStats: { headerLen: (headerText||"").length, resumeLen: 0, profileLen: 0, totalLen: 0 } };
     }
@@ -2370,11 +3187,15 @@
     var booleanPass = evaluateBooleanAst(ast, matchedSet);
 
     /* ── Collect ALL hits for notes — every term found goes in, regardless of NOT ── */
+    // Counts come from the resume when available, so profile/skill chrome doesn't inflate them.
+    var boolCountMap = countsFromResume(resumeText, uniqueScans, null);
     var allHitLabels = [];
     var seenHitLabel = {};
     for (var pi = 0; pi < scanResult.hits.length; pi++) {
       var hit = scanResult.hits[pi];
-      var label = hit.count > 1 ? hit.keyword + " (x" + hit.count + ")" : hit.keyword;
+      var bc = boolCountMap ? boolCountMap[hit.keyword.toLowerCase()] : undefined;
+      if (bc == null) bc = hit.count;
+      var label = bc > 1 ? hit.keyword + " (x" + bc + ")" : hit.keyword;
       var lbl = label.toLowerCase();
       if (seenHitLabel[lbl]) continue;
       seenHitLabel[lbl] = true;
@@ -2387,22 +3208,56 @@
     }
 
     var notesPosted = false;
-    if (postToNotes && allHitLabels.length > 0) {
+    // Post on any match, or on zero matches when real text was extracted (records a
+    // "No keyword tagged" note). Skip on extraction failures to avoid false negatives.
+    var shouldPostBoolNote = postToNotes && (allHitLabels.length > 0 || textLen >= 200);
+    if (shouldPostBoolNote) {
       try { await prepareNotesSection(doc, win, log); } catch (_) {}
       var boolPrefix = booleanPass ? "[PASS] " : "[FAIL] ";
       try {
-        notesPosted = await postKeywordHitsToNotes(doc, win, allHitLabels, allHitLabels.length, totalTerms, log, boolPrefix);
+        notesPosted = await postKeywordHitsToNotes(doc, win, allHitLabels, allHitLabels.length, totalTerms, log, boolPrefix, { partialScan: !resumeWasRead(resumeText, resumeIsChromeBool) });
       } catch (e) {
         log.push({ ok: false, msg: "Notes post error: " + ((e && e.message) || String(e)) });
       }
     }
 
     var notesFailReason = "";
-    if (!notesPosted && postToNotes && allHitLabels.length > 0) {
+    if (!notesPosted && shouldPostBoolNote) {
       for (var bfi = log.length - 1; bfi >= 0; bfi--) {
         if (!log[bfi].ok && log[bfi].msg) { notesFailReason = log[bfi].msg; break; }
       }
     }
+
+    var matchedPositiveCanons = positiveTerms.filter(function (t) { return !!matchedSet[t.trim().toLowerCase()]; });
+    var missedPositiveCanons  = positiveTerms.filter(function (t) { return  !matchedSet[t.trim().toLowerCase()]; });
+
+    try {
+      saveProfileDiag({
+        schemaVersion: 1, type: "boolean", timestamp: Date.now(),
+        profileUrl: (function () { try { return doc.location.href; } catch (_) { return ""; } })(),
+        userInput: booleanQueryRaw,
+        userKeywords: positiveTerms.slice(),
+        expandedKeywords: uniqueScans.slice(),
+        matchedUserKeywords: matchedPositiveCanons,
+        missedUserKeywords: missedPositiveCanons,
+        textSources: {
+          header: capText(headerText || "", DIAG_SOURCE_CAP),
+          resume: capText(resumeText || "", DIAG_SOURCE_CAP),
+          profile: capText(profileText || "", DIAG_SOURCE_CAP),
+          screening: capText(screeningText || "", DIAG_SOURCE_CAP),
+          fullPage: capText(fullPage || "", DIAG_SOURCE_CAP),
+        },
+        extractedText: capText(allText, DIAG_TEXT_CAP),
+        textStats: {
+          headerLen: (headerText || "").length, resumeLen: (resumeText || "").length,
+          profileLen: (profileText || "").length, screeningLen: (screeningText || "").length,
+          fullPageLen: (fullPage || "").length, totalLen: textLen,
+        },
+        durationMs: Math.round(performance.now() - _tBool0),
+        log: log.slice(),
+        booleanPass: booleanPass,
+      });
+    } catch (_) {}
 
     return {
       log: log,
@@ -2539,9 +3394,25 @@
       isoListHit: isoListHit,
       findKeywordHits: findKeywordHits,
       deduplicateHitsByCanonical: deduplicateHitsByCanonical,
+      formatNoteText: formatNoteText,
+      formatNoteHtml: formatNoteHtml,
+      dedupeTextSegments: dedupeTextSegments,
+      collapseInlineRepeats: collapseInlineRepeats,
+      noteConfirmMarker: noteConfirmMarker,
+      feedDeltaCount: feedDeltaCount,
+      looksLikeSrSummaryChrome: looksLikeSrSummaryChrome,
+      resumeWasRead: resumeWasRead,
+      countsFromResume: countsFromResume,
       parseBooleanQuery: parseBooleanQuery,
       evaluateBooleanAst: evaluateBooleanAst,
       extractLeafTerms: extractLeafTerms,
+      stripExcludedText: stripExcludedText,
+      capText: capText,
+      saveProfileDiag: saveProfileDiag,
+      DIAG_KEY_PREFIX: DIAG_KEY_PREFIX,
+      DIAG_MAX_ENTRIES: DIAG_MAX_ENTRIES,
+      DIAG_TEXT_CAP: DIAG_TEXT_CAP,
+      DIAG_SOURCE_CAP: DIAG_SOURCE_CAP,
     };
     return;
   }

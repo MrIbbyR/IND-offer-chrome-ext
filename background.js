@@ -184,8 +184,186 @@ function handleWorkerDone(message, sender, sendResponse) {
   }, message.notesPosted ? jitter(2400) : jitter(1600));
 }
 
+// ── Resume-render focus manager ──
+// pdf.js does NOT render in hidden (background) worker tabs — Chrome pauses
+// requestAnimationFrame when document.visibilityState === "hidden", so the resume
+// text layer never appears and extraction falls back to SR's profile chrome. To get
+// the real resume we briefly foreground the worker tab while it reads the PDF, then
+// restore the user's tab. Serialized: only one worker holds focus at a time, and
+// focus hands off directly between workers so the user's tab isn't bounced each pass.
+const resumeFocus = {
+  holder: null,     // tabId currently foregrounded for resume rendering
+  userTabId: null,  // the user's tab to restore once no worker needs focus
+  queue: [],        // pending [{ tabId, resolve }]
+  timer: null,      // safety auto-release (content script may never send release)
+};
+
+function _grantResumeFocus(tabId) {
+  resumeFocus.holder = tabId;
+  chrome.tabs.get(tabId, (tab) => {
+    if (chrome.runtime.lastError || !tab) return;
+    chrome.tabs.update(tabId, { active: true }).catch(() => {});
+    // The window must also be focused for visibilityState to become "visible".
+    chrome.windows.update(tab.windowId, { focused: true }).catch(() => {});
+  });
+  clearTimeout(resumeFocus.timer);
+  resumeFocus.timer = setTimeout(() => releaseResumeFocus(tabId), 25000);
+}
+
+function acquireResumeFocus(tabId) {
+  return new Promise((resolve) => {
+    if (resumeFocus.holder === tabId) { resolve(); return; }
+    if (resumeFocus.holder != null) { resumeFocus.queue.push({ tabId, resolve }); return; }
+    // First steal — remember the user's (non-worker) tab so we can restore it later.
+    if (resumeFocus.userTabId == null) {
+      chrome.tabs.query({ active: true, lastFocusedWindow: true }, (tabs) => {
+        const t = tabs && tabs[0];
+        if (t && !(parallelQueue && parallelQueue.active.has(t.id))) resumeFocus.userTabId = t.id;
+        _grantResumeFocus(tabId);
+        resolve();
+      });
+      return;
+    }
+    _grantResumeFocus(tabId);
+    resolve();
+  });
+}
+
+function releaseResumeFocus(tabId) {
+  if (resumeFocus.holder !== tabId) {
+    // Tab was queued but never got focus — drop it from the queue.
+    resumeFocus.queue = resumeFocus.queue.filter((q) => q.tabId !== tabId);
+    return;
+  }
+  clearTimeout(resumeFocus.timer);
+  resumeFocus.holder = null;
+  const next = resumeFocus.queue.shift();
+  if (next) {
+    _grantResumeFocus(next.tabId);
+    next.resolve();
+  } else if (resumeFocus.userTabId != null) {
+    // Nobody waiting — restore the user's tab.
+    chrome.tabs.update(resumeFocus.userTabId, { active: true }).catch(() => {});
+    resumeFocus.userTabId = null;
+  }
+}
+
+// ── Resume attachment fallback ──
+// When the inline resume viewer never renders (even with foreground focus), the
+// content script clicks the "Resume" attachment, which opens the full resume in a
+// NEW tab. A content script can't read another tab's DOM, so the background catches
+// that tab (by openerTabId), foregrounds it so pdf.js renders, extracts the text via
+// chrome.scripting, closes it, and hands the text back to the worker.
+const resumeCapture = {
+  pending: new Map(), // workerTabId -> { armedAt, priorActiveTabId }
+  results: new Map(), // workerTabId -> { done, text }
+};
+
+// Injected into the resume tab (all frames). Prefers pdf.js text-layer spans, else
+// a shadow-piercing text walk. Self-contained — runs in the page's isolated world.
+function _extractResumeTextInPage() {
+  try {
+    var spans = document.querySelectorAll('.textLayer span, [class*="textLayer"] span');
+    if (spans.length > 20) {
+      var parts = [];
+      for (var i = 0; i < spans.length; i++) { var t = (spans[i].textContent || "").trim(); if (t) parts.push(t); }
+      if (parts.join(" ").length > 200) return parts.join(" ");
+    }
+  } catch (_) {}
+  function deepText(root) {
+    var out = [], seen = new Set();
+    (function walk(n) {
+      if (!n || seen.has(n)) return; seen.add(n);
+      if (n.nodeType === 3) { var t = (n.nodeValue || "").trim(); if (t) out.push(t); return; }
+      if (n.shadowRoot) walk(n.shadowRoot);
+      var k = n.childNodes; if (k) for (var i = 0; i < k.length; i++) walk(k[i]);
+    })(root);
+    return out.join(" ");
+  }
+  try { return deepText(document.body || document.documentElement); } catch (_) { return ""; }
+}
+
+async function captureResumeFromTab(workerTabId, resumeTabId) {
+  const info = resumeCapture.pending.get(workerTabId) || {};
+  let text = "";
+  try {
+    // Wait for the resume tab to finish loading.
+    await new Promise((resolve) => {
+      let settled = false;
+      const finish = () => { if (!settled) { settled = true; chrome.tabs.onUpdated.removeListener(onUpd); clearTimeout(to); resolve(); } };
+      const to = setTimeout(finish, 10000);
+      function onUpd(tid, ch) { if (tid === resumeTabId && ch.status === "complete") finish(); }
+      chrome.tabs.onUpdated.addListener(onUpd);
+      chrome.tabs.get(resumeTabId, (t) => { if (!chrome.runtime.lastError && t && t.status === "complete") finish(); });
+    });
+    // Foreground so pdf.js renders, then give it time to paint the text layer.
+    await chrome.tabs.update(resumeTabId, { active: true }).catch(() => {});
+    const rt = await chrome.tabs.get(resumeTabId).catch(() => null);
+    if (rt) await chrome.windows.update(rt.windowId, { focused: true }).catch(() => {});
+    await new Promise((r) => setTimeout(r, 6000));
+    let results = [];
+    try {
+      results = await chrome.scripting.executeScript({
+        target: { tabId: resumeTabId, allFrames: true },
+        func: _extractResumeTextInPage,
+      });
+    } catch (_) {}
+    for (const r of results || []) { if (r && r.result && r.result.length > text.length) text = r.result; }
+  } catch (_) {}
+  try { await chrome.tabs.remove(resumeTabId); } catch (_) {}
+  if (info.priorActiveTabId != null) chrome.tabs.update(info.priorActiveTabId, { active: true }).catch(() => {});
+  resumeCapture.results.set(workerTabId, { done: true, text: text });
+  resumeCapture.pending.delete(workerTabId);
+}
+
+chrome.tabs.onCreated.addListener((tab) => {
+  const opener = tab.openerTabId;
+  if (opener != null && resumeCapture.pending.has(opener)) {
+    captureResumeFromTab(opener, tab.id);
+  }
+});
+
 // ── Message handler ──
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
+  if (message.type === "srArmResumeCapture") {
+    const tabId = sender.tab && sender.tab.id;
+    if (tabId == null) { sendResponse({ ok: false }); return; }
+    chrome.tabs.query({ active: true, lastFocusedWindow: true }, (tabs) => {
+      const prior = tabs && tabs[0] ? tabs[0].id : null;
+      resumeCapture.pending.set(tabId, { armedAt: Date.now(), priorActiveTabId: prior });
+      resumeCapture.results.delete(tabId);
+      // Expire a stale arm if the expected tab never opened.
+      setTimeout(() => {
+        const p = resumeCapture.pending.get(tabId);
+        if (p && Date.now() - p.armedAt >= 14000) resumeCapture.pending.delete(tabId);
+      }, 15000);
+      sendResponse({ ok: true });
+    });
+    return true;
+  }
+
+  if (message.type === "srGetResumeCapture") {
+    const tabId = sender.tab && sender.tab.id;
+    const res = tabId != null ? resumeCapture.results.get(tabId) : null;
+    if (res && res.done) { resumeCapture.results.delete(tabId); sendResponse({ done: true, text: res.text }); }
+    else sendResponse({ done: false });
+    return true;
+  }
+
+  if (message.type === "srRequestResumeFocus") {
+    const tabId = sender.tab && sender.tab.id;
+    if (tabId == null) { sendResponse({ ok: false }); return; }
+    acquireResumeFocus(tabId).then(() => sendResponse({ ok: true }));
+    return true;
+  }
+
+  if (message.type === "srReleaseResumeFocus") {
+    const tabId = sender.tab && sender.tab.id;
+    if (tabId != null) releaseResumeFocus(tabId);
+    sendResponse({ ok: true });
+    return true;
+  }
+
   if (message.type === "srCloseExtraProfileTabs") {
     const keepId = sender.tab && sender.tab.id;
     chrome.tabs.query({ url: "*://*.smartrecruiters.com/*" }, (tabs) => {
@@ -319,6 +497,10 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 });
 
 chrome.tabs.onRemoved.addListener((tabId) => {
+  // Free the resume-focus lock if a holding/queued worker tab is closed.
+  if (resumeFocus.holder === tabId || resumeFocus.queue.some((q) => q.tabId === tabId)) {
+    releaseResumeFocus(tabId);
+  }
   if (!parallelQueue || !parallelQueue.active.has(tabId)) return;
   const url = parallelQueue.active.get(tabId);
   parallelQueue.active.delete(tabId);

@@ -73,7 +73,12 @@ var KEYWORD_EXPANSIONS = {
   "ml ops":       ["mlops"],
   "kubernetes":   ["k8s"],
   "k8s":          ["kubernetes"],
-  "docker":       ["containerization", "container"],
+  // Resumes often use compound forms (Dockerfile, Dockerized) without ever
+  // writing "Docker" alone. The word-boundary check in the regex fallback
+  // rejects these, so the canonical keyword misses unless the compounds are
+  // listed as expansion forms.
+  "docker":       ["containerization", "container", "dockerfile", "dockerfiles", "dockerized", "dockerize", "dockerise"],
+  "dockerfile":   ["docker"],
   "ci/cd":        ["cicd", "ci cd", "continuous integration", "continuous deployment"],
   "cicd":         ["ci/cd", "continuous integration"],
 
@@ -309,6 +314,7 @@ function resolveKeywordsWithMeta(rawInput) {
     keywords: canonicalizeKeywords(expanded),
     canonicalMap: canonicalMap,
     userCount: userKeywords.length,
+    userKeywordsList: userKeywords.slice(),
   };
 }
 
