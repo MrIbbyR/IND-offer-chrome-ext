@@ -1,0 +1,13 @@
+{
+  "private": true,
+  "name": "sr-extension-e2e",
+  "description": "E2E tests for NIQ TA Helper — dev-only, not part of the extension",
+  "scripts": {
+    "test": "npx playwright test --config=playwright.config.js",
+    "test:headed": "npx playwright test --config=playwright.config.js --headed",
+    "install-browsers": "npx playwright install chromium"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.52.0"
+  }
+}

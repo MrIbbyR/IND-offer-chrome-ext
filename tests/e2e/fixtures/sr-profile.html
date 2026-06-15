@@ -1,0 +1,197 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>SR Profile Fixture</title>
+  <style>
+    body { font: 14px system-ui, sans-serif; margin: 20px; background: #f5f5f5; }
+    #st-candidateView { background: #fff; padding: 16px; border-radius: 8px; }
+    .resume-content { white-space: pre-wrap; padding: 12px; background: #fafafa; }
+    [contenteditable] { border: 1px solid #ccc; padding: 8px; min-height: 60px; }
+    spl-button { display: inline-block; padding: 6px 16px; cursor: pointer; }
+    spl-dropdown { display: inline-block; position: relative; }
+    spl-tab { display: inline-block; padding: 8px 16px; cursor: pointer; }
+    spl-tab-label { display: inline-block; }
+    spl-avatar { display: inline-block; width: 32px; height: 32px; }
+    .hidden { display: none; }
+  </style>
+</head>
+<body>
+  <!--
+    This fixture replicates SmartRecruiters' DOM structure for E2E testing.
+    Custom elements are defined in <script> below to provide shadow roots
+    where SR's real components use them.
+  -->
+
+  <!-- ── Candidate view root ── -->
+  <div id="st-candidateView">
+
+    <!-- ── Candidate header ── -->
+    <sr-candidate-header data-testid="candidate-header">
+      <h2 class="candidate-name">Jane Doe</h2>
+      <div class="candidate-summary">Senior IAM Engineer — SailPoint, Okta, CIAM</div>
+    </sr-candidate-header>
+
+    <!-- ── Tab bar ── -->
+    <div role="tablist">
+      <spl-tab id="st-resume" role="tab" data-fixture-tab="resume">Resume</spl-tab>
+      <spl-tab id="st-profile" role="tab" data-fixture-tab="profile">Profile</spl-tab>
+      <spl-tab id="st-notes" role="tab" data-fixture-tab="notes">Notes</spl-tab>
+      <spl-tab id="st-screening" role="tab" data-fixture-tab="screening">Screening</spl-tab>
+    </div>
+
+    <!-- ── Resume viewer (inside shadow root) ── -->
+    <sr-resume-viewer id="fixture-resume-viewer">
+      <div class="resume-content">
+        Jane Doe — Senior Identity &amp; Access Management Engineer
+
+        PROFESSIONAL SUMMARY
+        Over 8 years of experience in Identity and Access Management (IAM) with deep expertise
+        in SailPoint IdentityIQ, Okta, CyberArk, and Ping Identity. Designed and implemented
+        enterprise-scale IAM solutions for Fortune 500 clients. Strong background in CIAM,
+        SSO/SAML/OAuth integration, and zero-trust architecture.
+
+        TECHNICAL SKILLS
+        IAM Platforms: SailPoint IdentityIQ, SailPoint IdentityNow, Okta Workforce Identity,
+        Okta Customer Identity (CIAM), Ping Identity PingFederate, PingAccess, CyberArk PAM
+        Protocols: SAML 2.0, OAuth 2.0, OpenID Connect, SCIM, LDAP, Kerberos
+        Cloud: AWS IAM, Azure AD, GCP IAM
+        Languages: Java, Python, PowerShell, JavaScript, SQL
+        Tools: ServiceNow, Jira, Splunk, Terraform, Ansible, Docker, Kubernetes
+
+        PROFESSIONAL EXPERIENCE
+        Senior IAM Engineer — Acme Corp (2020 – Present)
+        • Led SailPoint IdentityIQ implementation for 25,000+ user organization
+        • Designed Okta SSO integration with 40+ SaaS applications
+        • Built custom CIAM portal using Okta Customer Identity Cloud
+        • Implemented automated access certification campaigns reducing review time by 60%
+        • Managed migration from legacy LDAP to modern cloud IAM stack
+
+        IAM Consultant — SecureID Solutions (2017 – 2020)
+        • Deployed Ping Identity federation across 3 business units
+        • Developed custom SailPoint connectors for proprietary HR systems
+        • Conducted IAM maturity assessments for 12 enterprise clients
+        • Implemented CyberArk privileged access management for critical infrastructure
+
+        EDUCATION
+        M.S. Computer Science — Georgia Institute of Technology (2017)
+        B.S. Information Technology — University of Florida (2015)
+
+        CERTIFICATIONS
+        • SailPoint Certified IdentityIQ Engineer
+        • Okta Certified Professional
+        • CISSP — Certified Information Systems Security Professional
+      </div>
+    </sr-resume-viewer>
+
+    <!-- ── Profile overview ── -->
+    <div class="profile" data-testid="profile-overview" style="display:none">
+      <div class="skills">
+        <h3>Skills</h3>
+        <span>SailPoint</span> <span>Okta</span> <span>IAM</span> <span>CIAM</span>
+        <span>SSO</span> <span>SAML</span> <span>OAuth</span> <span>Python</span>
+      </div>
+      <div class="experience">
+        <h3>Experience</h3>
+        <div>Senior IAM Engineer at Acme Corp — 5 years</div>
+        <div>IAM Consultant at SecureID Solutions — 3 years</div>
+      </div>
+      <div class="education">
+        <h3>Education</h3>
+        <div>M.S. Computer Science — Georgia Tech</div>
+      </div>
+    </div>
+
+    <!-- ── Pipeline controls ── -->
+    <div id="st-moveForward">
+      <spl-button data-fixture-role="move-forward">Move Forward</spl-button>
+    </div>
+  </div>
+
+  <!-- ── Notes form (lives OUTSIDE #st-candidateView, in a separate spl-form-element) ── -->
+  <div id="spl-form-element_0" data-fixture-notes-form>
+    <style></style>
+    <spl-avatar></spl-avatar>
+    <div class="notes-form-inner">
+      <!-- Dropdown 1: Publisher / visibility (NOT the note-type selector) -->
+      <spl-dropdown data-fixture-role="publisher-dropdown">
+        <spl-button data-fixture-role="publisher-trigger">Using Publisher</spl-button>
+        <div id="spl-dropdown-menu-100" class="hidden">
+          <spl-dropdown-item># Hash-Tag candidates</spl-dropdown-item>
+          <spl-dropdown-item>Create links to candidate profiles</spl-dropdown-item>
+        </div>
+      </spl-dropdown>
+
+      <!-- Dropdown 2: Note type (Open note / Direct message / Note to self) -->
+      <spl-dropdown data-fixture-role="note-type-dropdown">
+        <spl-button data-fixture-role="note-type-trigger">Open note</spl-button>
+        <div id="spl-dropdown-menu-101" class="hidden">
+          <spl-dropdown-item>Open note</spl-dropdown-item>
+          <spl-dropdown-item>Direct message</spl-dropdown-item>
+          <spl-dropdown-item>Note to self</spl-dropdown-item>
+        </div>
+      </spl-dropdown>
+
+      <!-- Hidden textarea (SR legacy, replaced by contenteditable) -->
+      <textarea class="hidden" style="display:none"></textarea>
+
+      <!-- Contenteditable: the actual notes input in current SR -->
+      <div contenteditable="true" role="textbox" data-fixture-role="notes-input"
+           style="min-height:60px; border:1px solid #ccc; padding:8px;"></div>
+
+      <!-- Post button (NOT inside any spl-dropdown) -->
+      <spl-button data-fixture-role="post-button">Post</spl-button>
+    </div>
+  </div>
+
+  <!-- ── Dropdown menus (SR portals these to body level) ── -->
+  <div id="spl-dropdown-menu-200" class="hidden">
+    <spl-dropdown-item>Open note</spl-dropdown-item>
+    <spl-dropdown-item>Direct message</spl-dropdown-item>
+    <spl-dropdown-item>Note to self</spl-dropdown-item>
+  </div>
+
+  <script>
+    // Define custom elements that mirror SR's web components.
+    // Only the minimum needed: tag name registration + shadow root for elements
+    // that the extension expects to have shadow roots.
+    var customTags = [
+      "spl-tab", "spl-tab-label", "spl-button", "spl-dropdown",
+      "spl-dropdown-item", "spl-avatar", "spl-truncate",
+      "sr-resume-viewer", "sr-candidate-header", "sr-candidate-summary",
+      "sr-link", "spl-button-group",
+    ];
+    customTags.forEach(function (tag) {
+      if (!customElements.get(tag)) {
+        customElements.define(tag, class extends HTMLElement {
+          constructor() {
+            super();
+            // spl-button and spl-tab get shadow roots — the extension pierces these
+            if (tag === "spl-button" || tag === "spl-tab") {
+              var shadow = this.attachShadow({ mode: "open" });
+              shadow.innerHTML = "<button><slot></slot></button>";
+            }
+          }
+        });
+      }
+    });
+
+    // Fixture helper: simulate dropdown open/close
+    window.__fixtureOpenDropdown = function (menuId) {
+      var menu = document.getElementById(menuId);
+      if (menu) menu.classList.remove("hidden");
+    };
+    window.__fixtureCloseDropdown = function (menuId) {
+      var menu = document.getElementById(menuId);
+      if (menu) menu.classList.add("hidden");
+    };
+
+    // Make the page URL look like a candidate profile
+    if (location.pathname === "/" || !location.pathname.match(/\/app\/people\//)) {
+      try {
+        history.replaceState(null, "", "/app/people/applications/abc123-def456-ghi789/");
+      } catch (_) {}
+    }
+  </script>
+</body>
+</html>
