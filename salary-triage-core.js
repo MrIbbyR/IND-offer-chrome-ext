@@ -1571,9 +1571,13 @@
         queue: urls.slice(),
       });
       // GDPR: seed via chrome.storage.session shim (extension-isolated), await before navigating.
+      if (typeof __srSessionSet !== "function") {
+        log.push({ ok: false, msg: "Session storage shim not loaded (storage-session-shim.js)" });
+        return { ok: false, log, queued: 0 };
+      }
       const _seedOk = await __srSessionSet(KEY, JSON.stringify(state));
       if (!_seedOk) {
-        log.push({ ok: false, msg: "Queue write to session storage failed" });
+        log.push({ ok: false, msg: "Queue write denied: " + (globalThis.__srSessionLastError || "unknown reason") });
         return { ok: false, log, queued: 0 };
       }
       log.push({ ok: true, msg: "Queued " + urls.length + " profiles (URL list)" });
@@ -1597,9 +1601,13 @@
       total: targets.length,
     });
     // GDPR: seed via chrome.storage.session shim (extension-isolated), await before click-through.
+    if (typeof __srSessionSet !== "function") {
+      log.push({ ok: false, msg: "Session storage shim not loaded (storage-session-shim.js)" });
+      return { ok: false, log, queued: 0 };
+    }
     const _seedOk2 = await __srSessionSet(KEY, JSON.stringify(state));
     if (!_seedOk2) {
-      log.push({ ok: false, msg: "Queue write to session storage failed" });
+      log.push({ ok: false, msg: "Queue write denied: " + (globalThis.__srSessionLastError || "unknown reason") });
       return { ok: false, log, queued: 0 };
     }
     log.push({

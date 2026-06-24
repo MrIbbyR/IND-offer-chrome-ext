@@ -34,6 +34,9 @@
         // the page navigates, and the next page reads an empty queue and stalls.
         var err = null;
         try { err = chrome.runtime.lastError; } catch (_) {}
+        // Stash the reason so callers can log WHY a write failed (access denied,
+        // quota, missing API, …) instead of a generic "queue failed".
+        globalThis.__srSessionLastError = err ? (err.message || String(err)) : null;
         resolve(!err);
       });
     });

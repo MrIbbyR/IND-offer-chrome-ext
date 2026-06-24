@@ -9,14 +9,20 @@
 // re-apply it on every cold start AND expose an awaitable message (srEnsureSessionAccess)
 // so the popup can guarantee it is set BEFORE triggering any content-script seed write.
 function ensureSessionAccess() {
-  return new Promise((resolve) => {
-    try {
-      chrome.storage.session.setAccessLevel(
-        { accessLevel: "TRUSTED_AND_UNTRUSTED_CONTEXTS" },
-        () => { void chrome.runtime.lastError; resolve(true); }
-      );
-    } catch (_) { resolve(false); }
-  });
+  // setAccessLevel returns a Promise; do NOT rely on a callback (it may never
+  // fire, which would hang the popup's awaited srEnsureSessionAccess round-trip
+  // and let it seed before access is granted).
+  try {
+    const p = chrome.storage.session.setAccessLevel({
+      accessLevel: "TRUSTED_AND_UNTRUSTED_CONTEXTS",
+    });
+    if (p && typeof p.then === "function") {
+      return p.then(() => true).catch(() => false);
+    }
+    return Promise.resolve(true);
+  } catch (_) {
+    return Promise.resolve(false);
+  }
 }
 ensureSessionAccess();
 chrome.runtime.onInstalled.addListener(() => { ensureSessionAccess(); });
