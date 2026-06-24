@@ -1,5 +1,14 @@
 // background.js — service worker: parallel keyword queue coordinator + tab cleanup (MV3)
 
+// GDPR: queue state lives in chrome.storage.session — extension-isolated, in-memory,
+// cleared when the browser closes. Content scripts are "untrusted" contexts, so they
+// can only read/write session storage after the access level is widened to include
+// them. Without this, the *-autorun.js content scripts silently read null and no
+// queue ever resumes. Idempotent; safe to run on every service-worker cold start.
+try {
+  chrome.storage.session.setAccessLevel({ accessLevel: "TRUSTED_AND_UNTRUSTED_CONTEXTS" });
+} catch (_) {}
+
 /** Randomized delay — returns ms ± ~35% spread to avoid fixed-cadence bot detection. */
 function jitter(baseMs) {
   const lo = Math.round(baseMs * 0.65);

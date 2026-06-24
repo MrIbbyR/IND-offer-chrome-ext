@@ -1570,10 +1570,10 @@
         kind: "urls",
         queue: urls.slice(),
       });
-      try {
-        sessionStorage.setItem(KEY, JSON.stringify(state));
-      } catch (e) {
-        log.push({ ok: false, msg: "sessionStorage failed: " + (e && e.message) });
+      // GDPR: seed via chrome.storage.session shim (extension-isolated), await before navigating.
+      const _seedOk = await __srSessionSet(KEY, JSON.stringify(state));
+      if (!_seedOk) {
+        log.push({ ok: false, msg: "Queue write to session storage failed" });
         return { ok: false, log, queued: 0 };
       }
       log.push({ ok: true, msg: "Queued " + urls.length + " profiles (URL list)" });
@@ -1596,10 +1596,10 @@
       clickIndex: 0,
       total: targets.length,
     });
-    try {
-      sessionStorage.setItem(KEY, JSON.stringify(state));
-    } catch (e) {
-      log.push({ ok: false, msg: "sessionStorage failed: " + (e && e.message) });
+    // GDPR: seed via chrome.storage.session shim (extension-isolated), await before click-through.
+    const _seedOk2 = await __srSessionSet(KEY, JSON.stringify(state));
+    if (!_seedOk2) {
+      log.push({ ok: false, msg: "Queue write to session storage failed" });
       return { ok: false, log, queued: 0 };
     }
     log.push({

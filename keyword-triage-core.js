@@ -3415,10 +3415,11 @@
     var urls = harvestProfileUrls(doc, win);
     if (urls.length) {
       var state = Object.assign({}, baseState, { kind: "urls", queue: urls.slice() });
-      try {
-        sessionStorage.setItem(KEY, JSON.stringify(state));
-      } catch (e) {
-        log.push({ ok: false, msg: "sessionStorage failed: " + (e && e.message) });
+      // GDPR: seed the queue into chrome.storage.session via the shim (extension-isolated),
+      // not page-origin sessionStorage. Must await before navigating so the write lands.
+      var _seedOk = await __srSessionSet(KEY, JSON.stringify(state));
+      if (!_seedOk) {
+        log.push({ ok: false, msg: "Queue write to session storage failed" });
         return { ok: false, log: log, queued: 0 };
       }
       log.push({ ok: true, msg: "Queued " + urls.length + " profiles (URL list)" });
@@ -3433,10 +3434,10 @@
     }
 
     var state2 = Object.assign({}, baseState, { kind: "click", clickIndex: 0, total: targets.length });
-    try {
-      sessionStorage.setItem(KEY, JSON.stringify(state2));
-    } catch (e) {
-      log.push({ ok: false, msg: "sessionStorage failed: " + (e && e.message) });
+    // GDPR: seed via chrome.storage.session shim (extension-isolated), await before click-through.
+    var _seedOk2 = await __srSessionSet(KEY, JSON.stringify(state2));
+    if (!_seedOk2) {
+      log.push({ ok: false, msg: "Queue write to session storage failed" });
       return { ok: false, log: log, queued: 0 };
     }
     log.push({ ok: true, msg: "Queued " + targets.length + " applicants (click names)" });

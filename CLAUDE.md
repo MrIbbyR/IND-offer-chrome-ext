@@ -84,8 +84,11 @@ This extension processes candidate PII (names, salaries, resume text) and is del
 
 - **No raw candidate/resume data on disk.** Raw resume text lives only in-memory (the background `resumeCapture.results` `Map`, deleted on read — see Resume attachment fallback) and is never written to `chrome.storage.local` or IndexedDB.
 - **No persistent run history.** The former `run-history.js` IndexedDB module (which persisted run records across sessions) was **removed** for GDPR compliance. Do not reintroduce on-disk run history; if run history is ever needed again, keep it in `chrome.storage.session` (in-memory, cleared on browser close).
-- **Queue state is extension-isolated and ephemeral** via `chrome.storage.session` rather than page-origin `sessionStorage`.
+- **Queue state is extension-isolated and ephemeral** via `chrome.storage.session` rather than page-origin `sessionStorage`. Both the seed (core `startQueueFromPage` / `__srSalaryTriageStartQueue`) and the resume (`*-autorun.js`) go through the `__srSession*` shim — never raw `sessionStorage`, which the SmartRecruiters page can read.
+  - **Gotcha:** `chrome.storage.session` defaults to `TRUSTED_CONTEXTS`, which excludes content scripts. `background.js` calls `chrome.storage.session.setAccessLevel({ accessLevel: "TRUSTED_AND_UNTRUSTED_CONTEXTS" })` at the top of the service worker so the `*-core.js` / `*-autorun.js` content scripts can read/write the queue. Without that call the shim silently reads `null` and sequential (single-tab) runs never resume. (Keyword **parallel** mode is unaffected — it routes through `chrome.storage.local` worker config, not the session shim.)
 - `chrome.storage.local` is for **settings and aggregate last-run summaries only** — never raw resume text or per-candidate PII dumps. (Exception: per-profile `lastRunDiag_<timestamp>` diagnostics are capped at 20 and intended for debugging; treat them as PII and avoid widening their retention.)
+
+These invariants are enforced by `tests/gdpr-data-handling.test.js`, which scans the shipped source files (comments stripped) and fails if raw `sessionStorage`, IndexedDB, or a run-history module reappears, or if the `setAccessLevel` call is removed.
 
 ### Salary Parsing (`salary-triage-core.js`)
 

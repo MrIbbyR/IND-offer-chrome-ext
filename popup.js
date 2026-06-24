@@ -540,16 +540,9 @@ btnSalaryStop.addEventListener("click", async () => {
   salaryLogEl.innerHTML = "";
   // Abort flag fires in all tab polling loops within ~200 ms — no tab lookup needed
   try { await chrome.storage.local.set({ srAbortAll: true }); } catch (_) {}
-  // Clear sessionStorage in every open SR tab (not just the active one)
-  try {
-    const tabs = await chrome.tabs.query({ url: "*://*.smartrecruiters.com/*" });
-    await Promise.allSettled(tabs.map(t =>
-      chrome.scripting.executeScript({
-        target: { tabId: t.id, allFrames: false },
-        func: () => { try { sessionStorage.removeItem("sr_ext_salary_triage_v1"); } catch (_) {} },
-      })
-    ));
-  } catch (_) {}
+  // Clear the queue. chrome.storage.session is extension-global, so a single remove
+  // clears it for every tab at once (no per-tab injection needed).
+  try { await chrome.storage.session.remove("sr_ext_salary_triage_v1"); } catch (_) {}
   salaryLog("✓", "Cost assist stopped.");
   setSalaryStatus("salary-done", "Stopped");
 });
@@ -1137,15 +1130,11 @@ btnKwStop.addEventListener("click", async () => {
   try { await chrome.storage.local.set({ srAbortAll: true }); } catch (_) {}
   // Tell background to stop parallel queue (closes worker tabs if SW is alive)
   try { await chrome.runtime.sendMessage({ type: "srStopParallelKeywordQueue" }); } catch (_) {}
-  // Clear sessionStorage and close worker tabs directly — handles dead service worker case
+  // Clear the queue (chrome.storage.session is extension-global — one remove clears all tabs).
+  try { await chrome.storage.session.remove("sr_ext_keyword_triage_v1"); } catch (_) {}
+  // Close worker tabs directly — handles the dead-service-worker case.
   try {
     const tabs = await chrome.tabs.query({ url: "*://*.smartrecruiters.com/*" });
-    await Promise.allSettled(tabs.map(t =>
-      chrome.scripting.executeScript({
-        target: { tabId: t.id, allFrames: false },
-        func: () => { try { sessionStorage.removeItem("sr_ext_keyword_triage_v1"); } catch (_) {} },
-      })
-    ));
     // Close background profile tabs (parallel worker tabs opened by extension)
     const workerTabs = tabs.filter(t =>
       !t.active && /\/app\/people\/(applications|profile)\//i.test(t.url || "")
