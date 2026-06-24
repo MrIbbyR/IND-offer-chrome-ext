@@ -1,3 +1,4 @@
+
 // keyword-triage-autorun.js — URL queue OR click-through queue for keyword triage
 
 (function () {
@@ -121,7 +122,7 @@
     setTimeout(function () { try { d.remove(); } catch (_) {} }, 5000);
   }
 
-  function finishQueue(state, resultsLen) {
+  async function finishQueue(state, resultsLen) {                              // P0-2: made async
     try { playBeep("done"); } catch (_) {}
     try {
       if (chrome.runtime && chrome.runtime.sendMessage) {
@@ -132,7 +133,7 @@
         );
       }
     } catch (_) {}
-    sessionStorage.removeItem(KEY);
+    await __srSessionRemove(KEY);                                              // P0-2: was sessionStorage.removeItem
     try {
       if (chrome.storage && chrome.storage.local) {
         chrome.storage.local.set({
@@ -176,18 +177,18 @@
     var collect = globalThis.__srCollectApplicantClickTargets;
     if (typeof collect !== "function") {
       showToast("Keyword search: extension core missing — reload extension.");
-      sessionStorage.removeItem(KEY);
+      await __srSessionRemove(KEY);                                            // P0-2: was sessionStorage.removeItem
       return;
     }
     var targets = collect();
     if (!targets || !targets.length) {
       showToast("Keyword search: no names on page — scroll Applicants, then Stop and retry.");
-      sessionStorage.removeItem(KEY);
+      await __srSessionRemove(KEY);                                            // P0-2: was sessionStorage.removeItem
       return;
     }
     if (state.clickIndex >= targets.length) {
       showToast("Keyword search: fewer rows than queued — scroll to load all, or Stop.");
-      sessionStorage.removeItem(KEY);
+      await __srSessionRemove(KEY);                                            // P0-2: was sessionStorage.removeItem
       return;
     }
     var el = targets[state.clickIndex];
@@ -314,25 +315,25 @@
       if (wasWorker) return;
     } catch (_) {}
 
-    var raw = sessionStorage.getItem(KEY);
+    var raw = await __srSessionGet(KEY);                                       // P0-2: was sessionStorage.getItem
     if (!raw) return;
 
     var state;
     try { state = JSON.parse(raw); } catch (_) {
-      sessionStorage.removeItem(KEY);
+      await __srSessionRemove(KEY);                                            // P0-2: was sessionStorage.removeItem
       return;
     }
 
     var kind = queueKind(state);
     if (!kind || !isValidState(state, kind)) {
-      sessionStorage.removeItem(KEY);
+      await __srSessionRemove(KEY);                                            // P0-2: was sessionStorage.removeItem
       return;
     }
 
     __aborted = false;
     try {
       var stored = await new Promise(function (r) { chrome.storage.local.get(["srAbortAll"], r); });
-      if (stored && stored.srAbortAll) { sessionStorage.removeItem(KEY); return; }
+      if (stored && stored.srAbortAll) { await __srSessionRemove(KEY); return; } // P0-2: was sessionStorage.removeItem
     } catch (_) {}
 
     if (typeof globalThis.__srKeywordTriageRun !== "function" &&
@@ -353,9 +354,9 @@
           state.results = state.results || [];
           state.results.push({ url: state.returnUrl, clickIndex: state.clickIndex, skipped: true, error: "click_navigate_timeout" });
           var nextAfterMiss = state.clickIndex + 1;
-          if (nextAfterMiss >= state.total) { finishQueue(state, state.results.length); return; }
+          if (nextAfterMiss >= state.total) { await finishQueue(state, state.results.length); return; } // P0-2: await async finishQueue
           state.clickIndex = nextAfterMiss;
-          try { sessionStorage.setItem(KEY, JSON.stringify(state)); } catch (_) {}
+          await __srSessionSet(KEY, JSON.stringify(state));                     // P0-2: was sessionStorage.setItem
           await sleepJitter(1000);
           window.location.replace(state.returnUrl);
           return;
@@ -387,7 +388,7 @@
       await sleep(delay);
 
       var controlsOk = await waitUntilSrControlsReady(queueReadyCap);
-      if (__aborted) { sessionStorage.removeItem(KEY); return; }
+      if (__aborted) { await __srSessionRemove(KEY); return; }                 // P0-2: was sessionStorage.removeItem
       if (!controlsOk) {
         showToast("Keyword search: pipeline UI not ready — check network.");
         state.log = (state.log || []).concat([
@@ -401,16 +402,18 @@
         });
         if (kind === "urls") {
           state.queue.shift();
-          if (state.queue.length === 0) { finishQueue(state, state.results.length); return; }
-          try { sessionStorage.setItem(KEY, JSON.stringify(state)); } catch (_) { sessionStorage.removeItem(KEY); return; }
+          if (state.queue.length === 0) { await finishQueue(state, state.results.length); return; } // P0-2: await async finishQueue
+          var _ok = await __srSessionSet(KEY, JSON.stringify(state));           // P0-2: was sessionStorage.setItem
+          if (!_ok) { await __srSessionRemove(KEY); return; }                  // P0-2: was catch → removeItem
           await sleepJitter(2200);
           window.location.replace(state.queue[0]);
           return;
         }
         var nextClick = state.clickIndex + 1;
-        if (nextClick >= state.total) { finishQueue(state, state.results.length); return; }
+        if (nextClick >= state.total) { await finishQueue(state, state.results.length); return; } // P0-2: await async finishQueue
         state.clickIndex = nextClick;
-        try { sessionStorage.setItem(KEY, JSON.stringify(state)); } catch (_) { sessionStorage.removeItem(KEY); return; }
+        var _ok2 = await __srSessionSet(KEY, JSON.stringify(state));            // P0-2: was sessionStorage.setItem
+        if (!_ok2) { await __srSessionRemove(KEY); return; }                   // P0-2: was catch → removeItem
         await sleepJitter(2200);
         window.location.replace(state.returnUrl);
         return;
@@ -470,9 +473,10 @@
 
       if (kind === "urls") {
         state.queue.shift();
-        if (state.queue.length === 0) { finishQueue(state, state.results.length); return; }
-        try { sessionStorage.setItem(KEY, JSON.stringify(state)); } catch (_) {
-          sessionStorage.removeItem(KEY);
+        if (state.queue.length === 0) { await finishQueue(state, state.results.length); return; } // P0-2: await async finishQueue
+        var _ok3 = await __srSessionSet(KEY, JSON.stringify(state));            // P0-2: was sessionStorage.setItem
+        if (!_ok3) {                                                           // P0-2: was catch → removeItem
+          await __srSessionRemove(KEY);
           showToast("Keyword search: queue lost (storage full).");
           return;
         }
@@ -482,10 +486,11 @@
       }
 
       var nextClick2 = state.clickIndex + 1;
-      if (nextClick2 >= state.total) { finishQueue(state, state.results.length); return; }
+      if (nextClick2 >= state.total) { await finishQueue(state, state.results.length); return; } // P0-2: await async finishQueue
       state.clickIndex = nextClick2;
-      try { sessionStorage.setItem(KEY, JSON.stringify(state)); } catch (_) {
-        sessionStorage.removeItem(KEY);
+      var _ok4 = await __srSessionSet(KEY, JSON.stringify(state));              // P0-2: was sessionStorage.setItem
+      if (!_ok4) {                                                             // P0-2: was catch → removeItem
+        await __srSessionRemove(KEY);
         showToast("Keyword search: queue lost (storage full).");
         return;
       }

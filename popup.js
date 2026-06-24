@@ -1,6 +1,34 @@
 // popup.js — NIQ TA Helper: Offer + Cost assist + Keyword/Boolean
 // Uses xlsx-mini.js (local, self-contained — no CDN required).
 
+// ── GDPR storage limitation (Art. 5(1)(e)): lazy-GC of expired local PII ──
+// Runs on every popup open (the recruiter's normal entry point), so no scheduler is
+// needed. Diagnostics expire after 7 days; last-run result snapshots after 24 hours.
+(async function purgeExpiredRetention() {
+  try {
+    if (!(typeof chrome !== "undefined" && chrome.storage && chrome.storage.local)) return;
+    const DIAG_PREFIX = "lastRunDiag_";
+    const DIAG_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000;
+    const LASTRUN_MAX_AGE_MS = 24 * 60 * 60 * 1000;
+    const now = Date.now();
+    const all = await chrome.storage.local.get(null);
+    const toRemove = [];
+    for (const k of Object.keys(all)) {
+      if (k.indexOf(DIAG_PREFIX) === 0) {
+        const ts = parseInt(k.slice(DIAG_PREFIX.length), 10) || 0;
+        if (ts < now - DIAG_MAX_AGE_MS) toRemove.push(k);
+      }
+    }
+    for (const k of ["keywordTriageLastRun", "salaryTriageLastRun"]) {
+      const rec = all[k];
+      if (rec && typeof rec.finishedAt === "number" && rec.finishedAt < now - LASTRUN_MAX_AGE_MS) {
+        toRemove.push(k);
+      }
+    }
+    if (toRemove.length) await chrome.storage.local.remove(toRemove);
+  } catch (_) {}
+})();
+
 const BINDINGS = [
   { label: "Annual Salary",                       cell: "E16" },  // Same as Total Base Salary (Annual)
   { label: "Pay Based on Frequency",              cell: "D6"  },
@@ -1137,6 +1165,14 @@ if (btnKwLastRun) {
     try {
       const data = await chrome.storage.local.get("keywordTriageLastRun");
       const run = data.keywordTriageLastRun;
+      // Storage limitation (Art. 5(1)(e)): ignore + purge snapshots older than 24h.
+      const LASTRUN_MAX_AGE_MS = 24 * 60 * 60 * 1000;
+      if (run && typeof run.finishedAt === "number" && run.finishedAt < Date.now() - LASTRUN_MAX_AGE_MS) {
+        try { await chrome.storage.local.remove("keywordTriageLastRun"); } catch (_) {}
+        kwLog("✗", "Previous run data expired (older than 24h) — run a keyword search first.");
+        setKwStatus("error", "Expired");
+        return;
+      }
       if (!run) {
         kwLog("✗", "No previous run data found — run a keyword search first.");
         setKwStatus("error", "No data");
@@ -1279,7 +1315,7 @@ if (btnKwDiagHistory && kwDiagPanel) {
       let html = `<div style="display:flex;gap:6px;align-items:center;margin-bottom:4px">
         <span style="color:var(--muted)">${entries.length} entries</span>
         <button type="button" id="kwDiagCopyJson" class="btn-salary secondary" style="font-size:11px;padding:2px 8px">Copy all JSON</button>
-        <button type="button" id="kwDiagClear" class="btn-salary danger" style="font-size:11px;padding:2px 8px">Clear all</button>
+        <button type="button" id="kwDiagClear" class="btn-salary danger" style="font-size:11px;padding:2px 8px" title="Erase all locally-stored candidate data: diagnostics + last-run results">Clear all candidate data</button>
       </div>`;
       entries.forEach((e, i) => {
         const matched = (e.matchedUserKeywords || []).length;
@@ -1323,10 +1359,19 @@ if (btnKwDiagHistory && kwDiagPanel) {
 
       document.getElementById("kwDiagClear")?.addEventListener("click", async (ev) => {
         ev.stopPropagation();
-        const keys = Object.keys(await chrome.storage.local.get(null)).filter(k => k.indexOf(DIAG_PREFIX) === 0);
-        if (!keys.length) return;
+        // Data-subject erasure (Art. 17): wipe ALL locally-stored candidate data —
+        // diagnostics AND the last-run result snapshots (keyword + salary), not just diags.
+        const all = await chrome.storage.local.get(null);
+        const keys = Object.keys(all).filter(k => k.indexOf(DIAG_PREFIX) === 0);
+        for (const k of ["keywordTriageLastRun", "salaryTriageLastRun"]) {
+          if (k in all) keys.push(k);
+        }
+        if (!keys.length) {
+          kwDiagPanel.innerHTML = '<div style="color:var(--muted);padding:4px">Nothing to clear.</div>';
+          return;
+        }
         await chrome.storage.local.remove(keys);
-        kwDiagPanel.innerHTML = '<div style="color:var(--muted);padding:4px">Cleared.</div>';
+        kwDiagPanel.innerHTML = '<div style="color:var(--muted);padding:4px">Cleared all candidate data (diagnostics + last-run results).</div>';
       });
     } catch (e) {
       kwDiagPanel.innerHTML = `<div style="color:var(--warn)">Error: ${escapeHtml(String(e?.message || e))}</div>`;

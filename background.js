@@ -65,11 +65,22 @@ let parallelQueue = null; // { urls: [], config: {}, workers: N, returnUrl, resu
 // Persist remaining URLs + results so the queue survives MV3 service-worker restarts.
 function persistQueueUrls() {
   if (!parallelQueue) return;
+  // GDPR data-minimization: keep diagLog OUT of this intermediate, restart-survival
+  // copy. It has no consumer here (the popup reads diagLog only from the final
+  // keywordTriageLastRun, which is purged on a 24h TTL) and would otherwise orphan in
+  // chrome.storage.local with no TTL if Chrome is closed mid-run. diagLog still flows
+  // to the final results via the in-memory parallelQueue.results push in handleWorkerDone.
+  const slimResults = parallelQueue.results.map((r) => {
+    if (!r || !r.diagLog) return r;
+    const { diagLog, ...rest } = r;
+    return rest;
+  });
   chrome.storage.local.set({
     srParallelQueueUrls: parallelQueue.urls.slice(),
-    srParallelQueueResults: parallelQueue.results.slice(),
+    srParallelQueueResults: slimResults,
     srParallelQueueReturnUrl: parallelQueue.returnUrl,
     srParallelQueueWorkers: parallelQueue.workers,
+    srParallelQueueStartedAt: parallelQueue.startedAt || Date.now(),
   }).catch(() => {});
 }
 
@@ -77,6 +88,7 @@ function clearPersistedQueue() {
   chrome.storage.local.remove([
     "srParallelQueueUrls", "srParallelQueueResults",
     "srParallelQueueReturnUrl", "srParallelQueueWorkers",
+    "srParallelQueueStartedAt",
   ]).catch(() => {});
 }
 
@@ -396,12 +408,14 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       results: [],
       active: new Map(),
       stopped: false,
+      startedAt: Date.now(),
     };
 
     chrome.storage.local
       .set({
         srParallelWorkerConfig: config,
         srParallelWorkerActive: true,
+        srParallelQueueStartedAt: parallelQueue.startedAt,
       })
       .then(() => {
         let launched = 0;
@@ -428,9 +442,19 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     if (!parallelQueue) {
       chrome.storage.local.get(
         ["srParallelWorkerActive", "srParallelWorkerConfig", "srParallelQueueUrls",
-         "srParallelQueueResults", "srParallelQueueReturnUrl", "srParallelQueueWorkers"],
+         "srParallelQueueResults", "srParallelQueueReturnUrl", "srParallelQueueWorkers",
+         "srParallelQueueStartedAt"],
         (stored) => {
           if (chrome.runtime.lastError || !stored.srParallelWorkerActive || !stored.srParallelQueueUrls) {
+            sendResponse({ next: false });
+            return;
+          }
+          // GDPR: abandon stale queues (e.g. Chrome closed mid-run) so candidate
+          // URLs/results don't persist indefinitely. No real run exceeds 2 hours.
+          const startedAt = stored.srParallelQueueStartedAt || 0;
+          if (startedAt && Date.now() - startedAt > 2 * 60 * 60 * 1000) {
+            clearPersistedQueue();
+            chrome.storage.local.set({ srParallelWorkerActive: false }).catch(() => {});
             sendResponse({ next: false });
             return;
           }
@@ -442,6 +466,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
             results: stored.srParallelQueueResults || [],
             active: new Map(),
             stopped: false,
+            startedAt: startedAt || Date.now(),
           };
           handleWorkerDone(message, sender, sendResponse);
         }

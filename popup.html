@@ -727,6 +727,21 @@
     </div>
   </div>
 
+  <!-- ── Transparency disclosure (GDPR Art. 5(1)(a), 13) ── -->
+  <details id="dataPrivacy" style="margin:10px 8px 4px;border-top:1px solid var(--border);padding-top:6px;font-size:11px;color:var(--muted)">
+    <summary style="cursor:pointer;color:var(--accent)">Data &amp; Privacy</summary>
+    <div style="margin-top:6px;line-height:1.5">
+      <p style="margin:4px 0"><b>No candidate data leaves your browser.</b> This extension makes zero external network calls — everything stays on this device and within SmartRecruiters.</p>
+      <p style="margin:4px 0">Stored locally (<code>chrome.storage.local</code>) on this device only:</p>
+      <ul style="margin:4px 0 4px 16px;padding:0">
+        <li><b>Diagnostics</b> — text lengths, keyword match results, and the profile URL, to debug missed keywords. Raw resume text is <b>not</b> stored unless <code>srDiagRawCapture</code> is explicitly enabled for debugging. Auto-deleted after <b>7 days</b> (max 20 entries).</li>
+        <li><b>Last-run results</b> (keyword &amp; salary) — profile URLs and match/move outcomes. Auto-deleted after <b>24 hours</b>.</li>
+        <li>Salary screening answers are <b>redacted</b> from logs; only the in/out-of-budget Move action is recorded.</li>
+      </ul>
+      <p style="margin:4px 0">To erase everything now: <b>Keyword</b> tab → <b>Inspect diagnostics</b> → <b>Clear all candidate data</b>.</p>
+    </div>
+  </details>
+
   <script src="xlsx-mini.js"></script>
   <script src="keyword-expansions.js"></script>
   <script src="popup.js"></script>

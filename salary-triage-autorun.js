@@ -107,14 +107,16 @@
     }, 5000);
   }
 
-  function finishQueue(state, resultsLen) {
-    sessionStorage.removeItem(KEY);
+  async function finishQueue(state, resultsLen) {                              // P0-2: made async
+    await __srSessionRemove(KEY);                                              // P0-2: was sessionStorage.removeItem
     try {
       if (chrome.storage && chrome.storage.local) {
         chrome.storage.local.set({
           salaryTriageLastRun: {
             finishedAt: Date.now(),
-            log: state.log || [],
+            log: (state.log || []).filter(function (e) {                       // P0-3: filter salary amounts from log
+              return !(e.msg && /^Parsed amount:/i.test(e.msg));
+            }),
             results: state.results || [],
           },
         });
@@ -157,20 +159,20 @@
     const collect = globalThis.__srCollectApplicantClickTargets;
     if (typeof collect !== "function") {
       showToast("Cost assist: extension core missing — reload extension.");
-      sessionStorage.removeItem(KEY);
+      await __srSessionRemove(KEY);                                            // P0-2: was sessionStorage.removeItem
       return;
     }
 
     const targets = collect();
     if (!targets || !targets.length) {
       showToast("Cost assist: no names on page — scroll Applicants, then Stop queue and retry.");
-      sessionStorage.removeItem(KEY);
+      await __srSessionRemove(KEY);                                            // P0-2: was sessionStorage.removeItem
       return;
     }
 
     if (state.clickIndex >= targets.length) {
       showToast("Cost assist: fewer rows than queued — scroll to load all, or Stop queue.");
-      sessionStorage.removeItem(KEY);
+      await __srSessionRemove(KEY);                                            // P0-2: was sessionStorage.removeItem
       return;
     }
 
@@ -201,27 +203,27 @@
     if (!/smartrecruiters\.com/i.test(location.hostname)) return;
     if (window.top !== window.self) return;
 
-    const raw = sessionStorage.getItem(KEY);
+    const raw = await __srSessionGet(KEY);                                     // P0-2: was sessionStorage.getItem
     if (!raw) return;
 
     let state;
     try {
       state = JSON.parse(raw);
     } catch (_) {
-      sessionStorage.removeItem(KEY);
+      await __srSessionRemove(KEY);                                            // P0-2: was sessionStorage.removeItem
       return;
     }
 
     const kind = queueKind(state);
     if (!kind || !isValidState(state, kind)) {
-      sessionStorage.removeItem(KEY);
+      await __srSessionRemove(KEY);                                            // P0-2: was sessionStorage.removeItem
       return;
     }
 
     __aborted = false;
     try {
       const stored = await new Promise(function (r) { chrome.storage.local.get(["srAbortAll"], r); });
-      if (stored && stored.srAbortAll) { sessionStorage.removeItem(KEY); return; }
+      if (stored && stored.srAbortAll) { await __srSessionRemove(KEY); return; } // P0-2: was sessionStorage.removeItem
     } catch (_) {}
 
     if (typeof globalThis.__srSalaryTriageRun !== "function" && typeof globalThis.__srSalaryTriageRunMulti !== "function")
@@ -269,7 +271,7 @@
       await sleep(delay);
 
       const controlsOk = await waitUntilSrControlsReady(queueReadyCap);
-      if (__aborted) { sessionStorage.removeItem(KEY); return; }
+      if (__aborted) { await __srSessionRemove(KEY); return; }                 // P0-2: was sessionStorage.removeItem
       if (!controlsOk) {
         showToast("Cost assist: pipeline UI not ready — increase Wait after Screening or check network.");
         state.log = (state.log || []).concat([
@@ -279,39 +281,30 @@
         state.results.push({
           url: location.href,
           moved: false,
-          amount: null,
-          inBudget: null,
+          // GDPR minimization (Art. 5(1)(c)): inBudget dropped — salary-inferrable; `moved` is sufficient.
           clickIndex: kind === "click" ? state.clickIndex : undefined,
           error: "queue_controls_timeout",
         });
         if (kind === "urls") {
           state.queue.shift();
           if (state.queue.length === 0) {
-            finishQueue(state, state.results.length);
+            await finishQueue(state, state.results.length);                    // P0-2: finishQueue is now async
             return;
           }
-          try {
-            sessionStorage.setItem(KEY, JSON.stringify(state));
-          } catch (_) {
-            sessionStorage.removeItem(KEY);
-            return;
-          }
+          var _ok = await __srSessionSet(KEY, JSON.stringify(state));           // P0-2: was sessionStorage.setItem
+          if (!_ok) { await __srSessionRemove(KEY); return; }                  // P0-2: was catch → removeItem
           await sleepJitter(2200);
           window.location.replace(state.queue[0]);
           return;
         }
         const nextClick = state.clickIndex + 1;
         if (nextClick >= state.total) {
-          finishQueue(state, state.results.length);
+          await finishQueue(state, state.results.length);                      // P0-2: finishQueue is now async
           return;
         }
         state.clickIndex = nextClick;
-        try {
-          sessionStorage.setItem(KEY, JSON.stringify(state));
-        } catch (_) {
-          sessionStorage.removeItem(KEY);
-          return;
-        }
+        var _ok2 = await __srSessionSet(KEY, JSON.stringify(state));            // P0-2: was sessionStorage.setItem
+        if (!_ok2) { await __srSessionRemove(KEY); return; }                   // P0-2: was catch → removeItem
         await sleepJitter(2200);
         window.location.replace(state.returnUrl);
         return;
@@ -329,8 +322,6 @@
           log: [{ ok: false, msg: String((e && e.message) || e) }],
           moved: false,
           skipped: true,
-          amount: null,
-          inBudget: null,
         };
       }
 
@@ -339,8 +330,7 @@
       state.results.push({
         url: location.href,
         moved: !!result.moved,
-        amount: result.amount,
-        inBudget: result.inBudget,
+        // GDPR minimization (Art. 5(1)(c)): inBudget dropped — salary-inferrable; `moved` is sufficient.
         clickIndex: kind === "click" ? state.clickIndex : undefined,
       });
 
@@ -353,13 +343,12 @@
       if (kind === "urls") {
         state.queue.shift();
         if (state.queue.length === 0) {
-          finishQueue(state, state.results.length);
+          await finishQueue(state, state.results.length);                      // P0-2: finishQueue is now async
           return;
         }
-        try {
-          sessionStorage.setItem(KEY, JSON.stringify(state));
-        } catch (_) {
-          sessionStorage.removeItem(KEY);
+        var _ok3 = await __srSessionSet(KEY, JSON.stringify(state));            // P0-2: was sessionStorage.setItem
+        if (!_ok3) {                                                           // P0-2: was catch → removeItem
+          await __srSessionRemove(KEY);
           showToast("Cost assist: queue lost (storage full).");
           return;
         }
@@ -370,14 +359,13 @@
 
       const nextClick = state.clickIndex + 1;
       if (nextClick >= state.total) {
-        finishQueue(state, state.results.length);
+        await finishQueue(state, state.results.length);                        // P0-2: finishQueue is now async
         return;
       }
       state.clickIndex = nextClick;
-      try {
-        sessionStorage.setItem(KEY, JSON.stringify(state));
-      } catch (_) {
-        sessionStorage.removeItem(KEY);
+      var _ok4 = await __srSessionSet(KEY, JSON.stringify(state));              // P0-2: was sessionStorage.setItem
+      if (!_ok4) {                                                             // P0-2: was catch → removeItem
+        await __srSessionRemove(KEY);
         showToast("Cost assist: queue lost (storage full).");
         return;
       }
