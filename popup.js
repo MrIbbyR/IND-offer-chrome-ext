@@ -226,7 +226,10 @@ async function getSmartRecruitersTab() {
 async function ensureSalaryCore(tabId) {
   await chrome.scripting.executeScript({
     target: { tabId, allFrames: false },
-    files: ["sr-list-autoscroll.js", "salary-triage-core.js"],
+    // storage-session-shim.js first: on a tab that predates an extension reload,
+    // declared content scripts aren't re-injected, so __srSessionSet would be
+    // missing and the queue seed would fail with "shim not loaded".
+    files: ["storage-session-shim.js", "sr-list-autoscroll.js", "salary-triage-core.js"],
   });
 }
 
@@ -1035,7 +1038,8 @@ loadKwSettings().catch(() => {});
 async function ensureKeywordCore(tabId) {
   await chrome.scripting.executeScript({
     target: { tabId, allFrames: false },
-    files: ["keyword-expansions.js", "sr-list-autoscroll.js", "keyword-triage-core.js"],
+    // storage-session-shim.js first — see ensureSalaryCore for why (predates-reload tabs).
+    files: ["storage-session-shim.js", "keyword-expansions.js", "sr-list-autoscroll.js", "keyword-triage-core.js"],
   });
 }
 
