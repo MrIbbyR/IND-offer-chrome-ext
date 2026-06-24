@@ -506,6 +506,9 @@ btnSalaryQueue.addEventListener("click", async () => {
   setSalaryStatus("salary-running", "Starting…");
 
   try {
+    // Ensure chrome.storage.session is writable from content scripts BEFORE the
+    // core seeds the queue, or the (denied) write looks fine but nothing persists.
+    try { await chrome.runtime.sendMessage({ type: "srEnsureSessionAccess" }); } catch (_) {}
     await ensureSalaryCore(tab.id);
     const [inj] = await chrome.scripting.executeScript({
       target: { tabId: tab.id, allFrames: false },
@@ -1097,6 +1100,9 @@ async function handleKwGo(workers) {
       return;
     }
     kwLog("✓", "Found " + urls.length + " profiles. Starting " + workers + "× parallel workers…");
+    // Worker tabs persist queue progress in chrome.storage.session — make sure it is
+    // writable from content scripts before they launch.
+    try { await chrome.runtime.sendMessage({ type: "srEnsureSessionAccess" }); } catch (_) {}
     const resp = await chrome.runtime.sendMessage({
       type: "srStartParallelKeywordQueue",
       urls,

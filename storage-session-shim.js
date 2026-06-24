@@ -9,7 +9,11 @@
     if (!STORAGE) return Promise.resolve(null);
     return new Promise(function (resolve) {
       STORAGE.get([key], function (result) {
-        try { void chrome.runtime.lastError; } catch (_) {}
+        // Surface access-denied (and any other) errors as a miss rather than
+        // pretending success — see __srSessionSet for why this matters.
+        var err = null;
+        try { err = chrome.runtime.lastError; } catch (_) {}
+        if (err) { resolve(null); return; }
         var val = result && result[key];
         resolve(val != null ? JSON.stringify(val) : null);
       });
@@ -24,8 +28,13 @@
     payload[key] = val;
     return new Promise(function (resolve) {
       STORAGE.set(payload, function () {
-        try { void chrome.runtime.lastError; } catch (_) {}
-        resolve(true);
+        // chrome.storage.session exists in content scripts but writes are DENIED
+        // until the background widens the access level (setAccessLevel). Must
+        // resolve false on lastError — otherwise a denied write looks successful,
+        // the page navigates, and the next page reads an empty queue and stalls.
+        var err = null;
+        try { err = chrome.runtime.lastError; } catch (_) {}
+        resolve(!err);
       });
     });
   };

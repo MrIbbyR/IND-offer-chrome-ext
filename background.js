@@ -3,11 +3,24 @@
 // GDPR: queue state lives in chrome.storage.session — extension-isolated, in-memory,
 // cleared when the browser closes. Content scripts are "untrusted" contexts, so they
 // can only read/write session storage after the access level is widened to include
-// them. Without this, the *-autorun.js content scripts silently read null and no
-// queue ever resumes. Idempotent; safe to run on every service-worker cold start.
-try {
-  chrome.storage.session.setAccessLevel({ accessLevel: "TRUSTED_AND_UNTRUSTED_CONTEXTS" });
-} catch (_) {}
+// them. Without this, the *-core.js seed write is silently denied and the *-autorun.js
+// content scripts read null, so no queue ever resumes.
+// The access level does not reliably persist across service-worker restarts, so we
+// re-apply it on every cold start AND expose an awaitable message (srEnsureSessionAccess)
+// so the popup can guarantee it is set BEFORE triggering any content-script seed write.
+function ensureSessionAccess() {
+  return new Promise((resolve) => {
+    try {
+      chrome.storage.session.setAccessLevel(
+        { accessLevel: "TRUSTED_AND_UNTRUSTED_CONTEXTS" },
+        () => { void chrome.runtime.lastError; resolve(true); }
+      );
+    } catch (_) { resolve(false); }
+  });
+}
+ensureSessionAccess();
+chrome.runtime.onInstalled.addListener(() => { ensureSessionAccess(); });
+chrome.runtime.onStartup.addListener(() => { ensureSessionAccess(); });
 
 /** Randomized delay — returns ms ± ~35% spread to avoid fixed-cadence bot detection. */
 function jitter(baseMs) {
@@ -346,6 +359,13 @@ chrome.tabs.onCreated.addListener((tab) => {
 
 // ── Message handler ──
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
+  if (message.type === "srEnsureSessionAccess") {
+    // Popup awaits this before seeding a queue so the content-script write to
+    // chrome.storage.session is not denied by a not-yet-applied access level.
+    ensureSessionAccess().then((ok) => sendResponse({ ok }));
+    return true;
+  }
+
   if (message.type === "srArmResumeCapture") {
     const tabId = sender.tab && sender.tab.id;
     if (tabId == null) { sendResponse({ ok: false }); return; }
