@@ -37,18 +37,20 @@ After editing any file, click the refresh icon on the extension card in `chrome:
 
 `manifest.json` defines two content script groups injected at `document_idle` on `*.smartrecruiters.com/*`. Order within each group matters:
 
-**Group 1 (all frames):** `sr-list-autoscroll.js` → `salary-triage-core.js` → `keyword-expansions.js` → `keyword-triage-core.js`
+**Group 1 (all frames):** `sr-selectors.js` → `sr-list-autoscroll.js` → `salary-triage-core.js` → `keyword-expansions.js` → `keyword-triage-core.js`
 
-**Group 2 (main frame only):** `keyword-expansions.js` → `salary-triage-autorun.js` → `keyword-triage-autorun.js`
+**Group 2 (main frame only):** `storage-session-shim.js` → `keyword-expansions.js` → `salary-triage-autorun.js` → `keyword-triage-autorun.js`
 
 `keyword-expansions.js` must load before `keyword-triage-core.js` because the core file reads `KEYWORD_EXPANSIONS` and `KEYWORD_TYPO_ALIASES` from the global scope set by the expansions file.
+
+`storage-session-shim.js` must load before the autorun files because they read/write queue state through the `__srSessionGet/Set/Remove` globals it defines (see Storage Locations).
 
 ### Feature Split: Core vs Autorun
 
 Each feature is split into two files:
 
 - **`*-core.js`** — pure logic injected into candidate profile pages. Exposes `__sr*` globals. Testable (the test suite imports these directly via `require()`). These files use an IIFE `(function(){ "use strict"; ... })()` and also expose named exports for Node test compatibility.
-- **`*-autorun.js`** — state machine that manages the URL queue stored in `sessionStorage`. Reads queue state on page load, calls core functions, then navigates to the next URL.
+- **`*-autorun.js`** — state machine that manages the URL queue stored in `chrome.storage.session` (via the `storage-session-shim.js` async wrapper — **not** raw `sessionStorage`). Reads queue state on page load, calls core functions, then navigates to the next URL.
 
 ### Background Service Worker (`background.js`)
 
@@ -74,7 +76,16 @@ All navigation delays use `jitter(baseMs)` (±35% randomization). Worker tabs ar
 ### Storage Locations
 
 - `chrome.storage.local` — all user settings and last-run results (persists across sessions)
-- `sessionStorage` — URL queues for active Cost Assist and Keyword Search runs (scoped to each worker tab)
+- `chrome.storage.session` — URL queues for active Cost Assist and Keyword Search runs, accessed through the `__srSessionGet/Set/Remove` globals in `storage-session-shim.js`. This is extension-isolated and in-memory (cleared when the browser closes), unlike page-origin `sessionStorage`. Do not reintroduce raw `sessionStorage` for queue state — see GDPR Data Handling.
+
+### GDPR Data Handling
+
+This extension processes candidate PII (names, salaries, resume text) and is deliberately built for data minimization. When changing storage or persistence, preserve these invariants:
+
+- **No raw candidate/resume data on disk.** Raw resume text lives only in-memory (the background `resumeCapture.results` `Map`, deleted on read — see Resume attachment fallback) and is never written to `chrome.storage.local` or IndexedDB.
+- **No persistent run history.** The former `run-history.js` IndexedDB module (which persisted run records across sessions) was **removed** for GDPR compliance. Do not reintroduce on-disk run history; if run history is ever needed again, keep it in `chrome.storage.session` (in-memory, cleared on browser close).
+- **Queue state is extension-isolated and ephemeral** via `chrome.storage.session` rather than page-origin `sessionStorage`.
+- `chrome.storage.local` is for **settings and aggregate last-run summaries only** — never raw resume text or per-candidate PII dumps. (Exception: per-profile `lastRunDiag_<timestamp>` diagnostics are capped at 20 and intended for debugging; treat them as PII and avoid widening their retention.)
 
 ### Salary Parsing (`salary-triage-core.js`)
 
