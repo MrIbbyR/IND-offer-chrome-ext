@@ -220,7 +220,9 @@
           else resolve(r);
         });
       });
-      isWorker = resp && resp.active;
+      // Only claim tabs belonging to a KEYWORD queue — the salary autorun runs on the
+      // same profile pages and claims feature === "salary" tabs (undefined = legacy keyword).
+      isWorker = resp && resp.active && (resp.feature === "keyword" || resp.feature == null);
     } catch (_) {}
     if (!isWorker) { window.__srParallelWorkerLock = false; return false; }
 

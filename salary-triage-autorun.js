@@ -199,9 +199,87 @@
     }
   }
 
+  // ── Parallel worker path ──
+  // The background opens 2–3 background tabs and feeds each a profile URL (mirrors the
+  // keyword 2×/3× flow). Cost assist reads screening answers straight from the DOM with
+  // no PDF/resume render, so worker tabs can stay hidden — none of the resume-focus dance.
+  async function runAsParallelWorker() {
+    if (!isProfilePage()) return false;
+    if (window.__srSalaryParallelWorkerLock) return false;
+    window.__srSalaryParallelWorkerLock = true;
+
+    let isWorker = false;
+    try {
+      const resp = await new Promise(function (resolve) {
+        chrome.runtime.sendMessage({ type: "srIsParallelWorker" }, function (r) {
+          if (chrome.runtime.lastError) resolve(null);
+          else resolve(r);
+        });
+      });
+      // Claim only SALARY worker tabs — the keyword autorun runs on the same page and
+      // claims feature === "keyword" tabs.
+      isWorker = resp && resp.active && resp.feature === "salary";
+    } catch (_) {}
+    if (!isWorker) { window.__srSalaryParallelWorkerLock = false; return false; }
+
+    let cfgData = null;
+    try {
+      const store = await chrome.storage.local.get(["srParallelWorkerConfig"]);
+      cfgData = store.srParallelWorkerConfig;
+    } catch (_) {}
+    if (!cfgData) { window.__srSalaryParallelWorkerLock = false; return false; }
+
+    const settle = Math.max(500, parseInt(cfgData.screeningWaitMs, 10) || 600);
+    await sleepJitter(settle);
+
+    const queueReadyCap = Math.max(3000, parseInt(cfgData.queueReadyMaxMs, 10) || 16000);
+    const controlsOk = await waitUntilSrControlsReady(queueReadyCap);
+    if (!controlsOk) {
+      try {
+        chrome.runtime.sendMessage(
+          { type: "srWorkerDone", moved: false, error: "controls_timeout" },
+          function () { chrome.runtime.lastError; }
+        );
+      } catch (_) {}
+      return true;
+    }
+
+    let result;
+    try {
+      const runner =
+        typeof globalThis.__srSalaryTriageRunMulti === "function"
+          ? globalThis.__srSalaryTriageRunMulti
+          : globalThis.__srSalaryTriageRun;
+      result = await runner(cfgData || {});
+    } catch (e) {
+      result = { moved: false, log: [{ ok: false, msg: String((e && e.message) || e) }] };
+    }
+
+    const afterMoveMs = Math.max(300, parseInt(cfgData.afterMoveNavigateMs, 10) || 600);
+    if (result && result.moved) await sleep(afterMoveMs);
+
+    try {
+      // Background navigates the tab to the next URL itself (resp.next) — the worker
+      // just reports and returns; the reloaded page re-enters runAsParallelWorker.
+      await new Promise(function (resolve) {
+        chrome.runtime.sendMessage(
+          { type: "srWorkerDone", moved: !!(result && result.moved) },
+          function (r) { chrome.runtime.lastError; resolve(r); }
+        );
+      });
+    } catch (_) {}
+
+    return true;
+  }
+
   async function main() {
     if (!/smartrecruiters\.com/i.test(location.hostname)) return;
     if (window.top !== window.self) return;
+
+    try {
+      const wasWorker = await runAsParallelWorker();
+      if (wasWorker) return;
+    } catch (_) {}
 
     const raw = await __srSessionGet(KEY);                                     // P0-2: was sessionStorage.getItem
     if (!raw) return;

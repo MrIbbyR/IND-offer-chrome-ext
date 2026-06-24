@@ -98,7 +98,8 @@ const salaryMax       = document.getElementById("salaryMax");
 const salaryMin       = document.getElementById("salaryMin");
 const salaryWait      = document.getElementById("salaryWait");
 const salaryDryRun    = document.getElementById("salaryDryRun");
-const btnSalaryQueue    = document.getElementById("btnSalaryQueue");
+const btnSalaryGo2x     = document.getElementById("btnSalaryGo2x");
+const btnSalaryGo3x     = document.getElementById("btnSalaryGo3x");
 const btnSalaryStop     = document.getElementById("btnSalaryStop");
 const salaryStatusBox   = document.getElementById("salaryStatusBox");
 const salaryStatusDot   = document.getElementById("salaryStatusDot");
@@ -480,8 +481,13 @@ runBtn.addEventListener("click", async () => {
   runBtn.disabled = false;
 });
 
-// ── Cost assist: queue from Applicants list ──
-btnSalaryQueue.addEventListener("click", async () => {
+// ── Cost assist: parallel 2×/3× queue from Applicants list ──
+function setSalaryGoDisabled(val) {
+  if (btnSalaryGo2x) btnSalaryGo2x.disabled = val;
+  if (btnSalaryGo3x) btnSalaryGo3x.disabled = val;
+}
+
+async function handleSalaryGo(workers) {
   await saveSalarySettings().catch(() => {});
   try { await chrome.storage.local.remove("srAbortAll"); } catch (_) {}
   const cfg = readSalaryConfig();
@@ -503,33 +509,56 @@ btnSalaryQueue.addEventListener("click", async () => {
     return;
   }
 
-  btnSalaryQueue.disabled = true;
+  setSalaryGoDisabled(true);
   salaryStatusBox.classList.add("visible");
   salaryLogEl.innerHTML = "";
   setSalaryStatus("salary-running", "Starting…");
 
   try {
-    // Ensure chrome.storage.session is writable from content scripts BEFORE the
-    // core seeds the queue, or the (denied) write looks fine but nothing persists.
-    try { await chrome.runtime.sendMessage({ type: "srEnsureSessionAccess" }); } catch (_) {}
-    await ensureSalaryCore(tab.id);
-    const [inj] = await chrome.scripting.executeScript({
+    // ensureKeywordCore injects the autoscroll + __srHarvestProfileUrls helpers (which
+    // are list-generic, not keyword-specific) so we can collect profile URLs here.
+    await ensureKeywordCore(tab.id);
+    const [harvest] = await chrome.scripting.executeScript({
       target: { tabId: tab.id, allFrames: false },
-      func: (c) => globalThis.__srSalaryTriageStartQueue(c),
-      args: [cfg],
+      func: () => {
+        if (typeof globalThis.__srAutoscrollApplicantListUntilLoaded === "function") {
+          return globalThis.__srAutoscrollApplicantListUntilLoaded().then(() => {
+            if (typeof globalThis.__srHarvestProfileUrls === "function") {
+              return globalThis.__srHarvestProfileUrls();
+            }
+            return [];
+          });
+        }
+        if (typeof globalThis.__srHarvestProfileUrls === "function") {
+          return globalThis.__srHarvestProfileUrls();
+        }
+        return [];
+      },
     });
-    const out = inj?.result;
-    const lines = out?.log || [];
-    for (const e of lines) salaryLog(e.ok ? "✓" : "✗", e.msg);
-    if (out?.ok && out?.queued) {
-      const modeHint =
-        out.mode === "click"
-          ? "Click-through queue: opening each name in the same tab."
-          : "URL queue: jumping to each profile URL.";
-      salaryLog("✓", modeHint);
-      salaryLog("✓", "Keep this browser tab focused; results also saved when finished.");
-      setSalaryStatus("salary-done", "Cost assist running — keep tab focused");
+    const urls = harvest?.result || [];
+    if (!urls.length) {
+      salaryLog("✗", "No profile URLs found — scroll to load applicants, then try again.");
+      setSalaryStatus("error", "No profiles");
+      setSalaryGoDisabled(false);
+      return;
+    }
+    salaryLog("✓", "Found " + urls.length + " profiles. Starting " + workers + "× parallel workers…");
+    // Worker tabs persist queue progress in chrome.storage.session — make sure it is
+    // writable from content scripts before they launch.
+    try { await chrome.runtime.sendMessage({ type: "srEnsureSessionAccess" }); } catch (_) {}
+    const resp = await chrome.runtime.sendMessage({
+      type: "srStartParallelSalaryQueue",
+      urls,
+      config: cfg,
+      workers,
+      returnUrl: tab.url,
+    });
+    if (resp?.ok) {
+      salaryLog("✓", "Dispatched " + urls.length + " profiles across " + workers + " workers.");
+      salaryLog("✓", cfg.dryRun ? "Dry run: reading screening answers only (never clicks Move)." : "Workers run in the background — results saved when finished.");
+      setSalaryStatus("salary-done", "Cost assist running (" + workers + "× workers)");
     } else {
+      salaryLog("✗", resp?.error || "Failed to start parallel queue.");
       setSalaryStatus("error", "Queue failed");
     }
   } catch (e) {
@@ -537,19 +566,38 @@ btnSalaryQueue.addEventListener("click", async () => {
     setSalaryStatus("error", "Failed");
   }
 
-  btnSalaryQueue.disabled = false;
-});
+  setSalaryGoDisabled(false);
+}
 
-// ── Stop queue ──
+btnSalaryGo2x.addEventListener("click", () => handleSalaryGo(2));
+btnSalaryGo3x.addEventListener("click", () => handleSalaryGo(3));
+
+// ── Global stop: kills whatever feature is running, regardless of active tab ──
+// A keyword run launched from the Keyword tab can be stopped from the Cost assist
+// Stop (the default tab when the popup opens) and vice versa.
+async function stopEverything() {
+  // Abort flag fires in all tab polling loops within ~200 ms — no tab lookup needed.
+  try { await chrome.storage.local.set({ srAbortAll: true }); } catch (_) {}
+  // Tell background to tear down any parallel queue (closes worker tabs if SW is alive).
+  try { await chrome.runtime.sendMessage({ type: "srStopParallelKeywordQueue" }); } catch (_) {}
+  // Clear both session queues (chrome.storage.session is extension-global — one remove
+  // clears it for every tab at once).
+  try { await chrome.storage.session.remove(["sr_ext_salary_triage_v1", "sr_ext_keyword_triage_v1"]); } catch (_) {}
+  // Close worker tabs directly — handles the dead-service-worker case.
+  try {
+    const tabs = await chrome.tabs.query({ url: "*://*.smartrecruiters.com/*" });
+    const workerTabs = tabs.filter(t =>
+      !t.active && /\/app\/people\/(applications|profile)\//i.test(t.url || "")
+    );
+    if (workerTabs.length) await chrome.tabs.remove(workerTabs.map(t => t.id)).catch(() => {});
+  } catch (_) {}
+}
+
 btnSalaryStop.addEventListener("click", async () => {
   salaryStatusBox.classList.add("visible");
   salaryLogEl.innerHTML = "";
-  // Abort flag fires in all tab polling loops within ~200 ms — no tab lookup needed
-  try { await chrome.storage.local.set({ srAbortAll: true }); } catch (_) {}
-  // Clear the queue. chrome.storage.session is extension-global, so a single remove
-  // clears it for every tab at once (no per-tab injection needed).
-  try { await chrome.storage.session.remove("sr_ext_salary_triage_v1"); } catch (_) {}
-  salaryLog("✓", "Cost assist stopped.");
+  await stopEverything();
+  salaryLog("✓", "Stopped (all running tasks).");
   setSalaryStatus("salary-done", "Stopped");
 });
 
@@ -1136,22 +1184,9 @@ btnKwGo3x.addEventListener("click", () => handleKwGo(3));
 btnKwStop.addEventListener("click", async () => {
   kwStatusBox.classList.add("visible");
   kwLogEl.innerHTML = "";
-  // Abort flag fires in all tab polling loops within ~200 ms — no tab lookup needed
-  try { await chrome.storage.local.set({ srAbortAll: true }); } catch (_) {}
-  // Tell background to stop parallel queue (closes worker tabs if SW is alive)
-  try { await chrome.runtime.sendMessage({ type: "srStopParallelKeywordQueue" }); } catch (_) {}
-  // Clear the queue (chrome.storage.session is extension-global — one remove clears all tabs).
-  try { await chrome.storage.session.remove("sr_ext_keyword_triage_v1"); } catch (_) {}
-  // Close worker tabs directly — handles the dead-service-worker case.
-  try {
-    const tabs = await chrome.tabs.query({ url: "*://*.smartrecruiters.com/*" });
-    // Close background profile tabs (parallel worker tabs opened by extension)
-    const workerTabs = tabs.filter(t =>
-      !t.active && /\/app\/people\/(applications|profile)\//i.test(t.url || "")
-    );
-    if (workerTabs.length) await chrome.tabs.remove(workerTabs.map(t => t.id)).catch(() => {});
-  } catch (_) {}
-  kwLog("✓", "Keyword search stopped.");
+  // Global stop — kills any running feature (keyword OR cost assist), not just this tab's.
+  await stopEverything();
+  kwLog("✓", "Stopped (all running tasks).");
   setKwStatus("salary-done", "Stopped");
 });
 

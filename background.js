@@ -88,7 +88,9 @@ function showNotification(id, title, message) {
 }
 
 // ── Parallel queue state ──
-let parallelQueue = null; // { urls: [], config: {}, workers: N, returnUrl, results: [], active: Map<tabId, url>, stopped: bool }
+// feature: "keyword" | "salary" — both share this orchestration; only the result
+// shape, the saved last-run key, and the done-notification wording differ.
+let parallelQueue = null; // { feature, urls: [], config: {}, workers: N, returnUrl, results: [], active: Map<tabId, url>, stopped: bool }
 
 // Persist remaining URLs + results so the queue survives MV3 service-worker restarts.
 function persistQueueUrls() {
@@ -109,6 +111,7 @@ function persistQueueUrls() {
     srParallelQueueReturnUrl: parallelQueue.returnUrl,
     srParallelQueueWorkers: parallelQueue.workers,
     srParallelQueueStartedAt: parallelQueue.startedAt || Date.now(),
+    srParallelQueueFeature: parallelQueue.feature || "keyword",
   }).catch(() => {});
 }
 
@@ -116,7 +119,7 @@ function clearPersistedQueue() {
   chrome.storage.local.remove([
     "srParallelQueueUrls", "srParallelQueueResults",
     "srParallelQueueReturnUrl", "srParallelQueueWorkers",
-    "srParallelQueueStartedAt",
+    "srParallelQueueStartedAt", "srParallelQueueFeature",
   ]).catch(() => {});
 }
 
@@ -153,27 +156,47 @@ async function launchNextWorker() {
 
 function finishParallelQueue() {
   if (!parallelQueue) return;
+  const feature = parallelQueue.feature || "keyword";
   const results = parallelQueue.results || [];
-  const matched = results.filter(r => r.hitCount > 0).length;
   const returnUrl = parallelQueue.returnUrl || "";
 
   clearPersistedQueue();
-  chrome.storage.local
-    .set({
-      keywordTriageLastRun: {
-        finishedAt: Date.now(),
-        results: results,
-        parallel: true,
-      },
-      srParallelWorkerActive: false,
-    })
-    .catch(() => {});
 
-  showNotification(
-    "srParallelDone_" + Date.now(),
-    "NIQ TA Helper — Keyword search done",
-    matched + " profile" + (matched !== 1 ? "s" : "") + " matched out of " + results.length + " scanned."
-  );
+  if (feature === "salary") {
+    const moved = results.filter(r => r.moved).length;
+    chrome.storage.local
+      .set({
+        salaryTriageLastRun: {
+          finishedAt: Date.now(),
+          results: results,
+          parallel: true,
+        },
+        srParallelWorkerActive: false,
+      })
+      .catch(() => {});
+    showNotification(
+      "srParallelDone_" + Date.now(),
+      "NIQ TA Helper — Cost assist done",
+      moved + " profile" + (moved !== 1 ? "s" : "") + " moved forward out of " + results.length + " screened."
+    );
+  } else {
+    const matched = results.filter(r => r.hitCount > 0).length;
+    chrome.storage.local
+      .set({
+        keywordTriageLastRun: {
+          finishedAt: Date.now(),
+          results: results,
+          parallel: true,
+        },
+        srParallelWorkerActive: false,
+      })
+      .catch(() => {});
+    showNotification(
+      "srParallelDone_" + Date.now(),
+      "NIQ TA Helper — Keyword search done",
+      matched + " profile" + (matched !== 1 ? "s" : "") + " matched out of " + results.length + " scanned."
+    );
+  }
   playBeepInSRTab(returnUrl);
 
   parallelQueue = null;
@@ -185,16 +208,25 @@ function handleWorkerDone(message, sender, sendResponse) {
   const tabId = sender.tab && sender.tab.id;
   const url = (tabId && parallelQueue.active.get(tabId)) || "";
 
-  parallelQueue.results.push({
-    url: url,
-    hitCount: message.hitCount || 0,
-    matchedKeywords: message.matchedKeywords || [],
-    booleanPass: message.booleanPass,
-    notesPosted: !!message.notesPosted,
-    notesFailReason: message.notesFailReason || "",
-    textStats: message.textStats || null,
-    diagLog: message.diagLog || undefined,
-  });
+  if ((parallelQueue.feature || "keyword") === "salary") {
+    // GDPR minimization: only `moved` is kept — salary amount is never persisted.
+    parallelQueue.results.push({
+      url: url,
+      moved: !!message.moved,
+      error: message.error || undefined,
+    });
+  } else {
+    parallelQueue.results.push({
+      url: url,
+      hitCount: message.hitCount || 0,
+      matchedKeywords: message.matchedKeywords || [],
+      booleanPass: message.booleanPass,
+      notesPosted: !!message.notesPosted,
+      notesFailReason: message.notesFailReason || "",
+      textStats: message.textStats || null,
+      diagLog: message.diagLog || undefined,
+    });
+  }
 
   if (tabId) parallelQueue.active.delete(tabId);
 
@@ -429,13 +461,15 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     return true;
   }
 
-  if (message.type === "srStartParallelKeywordQueue") {
+  if (message.type === "srStartParallelKeywordQueue" || message.type === "srStartParallelSalaryQueue") {
     resetParallelQueue();
+    const feature = message.type === "srStartParallelSalaryQueue" ? "salary" : "keyword";
     const urls = message.urls || [];
     const workers = Math.max(1, Math.min(5, message.workers || 2));
     const config = message.config || {};
 
     parallelQueue = {
+      feature: feature,
       urls: urls.slice(),
       config: config,
       workers: workers,
@@ -451,6 +485,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         srParallelWorkerConfig: config,
         srParallelWorkerActive: true,
         srParallelQueueStartedAt: parallelQueue.startedAt,
+        srParallelQueueFeature: feature,
       })
       .then(() => {
         let launched = 0;
@@ -467,7 +502,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       })
       .catch(() => {});
 
-    sendResponse({ ok: true, queued: urls.length, workers: workers });
+    sendResponse({ ok: true, queued: urls.length, workers: workers, feature: feature });
     return true;
   }
 
@@ -478,7 +513,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       chrome.storage.local.get(
         ["srParallelWorkerActive", "srParallelWorkerConfig", "srParallelQueueUrls",
          "srParallelQueueResults", "srParallelQueueReturnUrl", "srParallelQueueWorkers",
-         "srParallelQueueStartedAt"],
+         "srParallelQueueStartedAt", "srParallelQueueFeature"],
         (stored) => {
           if (chrome.runtime.lastError || !stored.srParallelWorkerActive || !stored.srParallelQueueUrls) {
             sendResponse({ next: false });
@@ -494,6 +529,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
             return;
           }
           parallelQueue = {
+            feature: stored.srParallelQueueFeature || "keyword",
             urls: stored.srParallelQueueUrls,
             config: stored.srParallelWorkerConfig || {},
             workers: stored.srParallelQueueWorkers || 2,
@@ -551,7 +587,9 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         tabId != null &&
         parallelQueue.active.has(tabId)
       );
-    sendResponse({ active });
+    // feature lets each autorun (salary vs keyword both run on every profile page)
+    // claim only the worker tabs that belong to its own queue.
+    sendResponse({ active, feature: active ? (parallelQueue.feature || "keyword") : null });
     return true;
   }
 });
