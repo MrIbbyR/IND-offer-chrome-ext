@@ -99,11 +99,14 @@ function parseSharedStrings(xml) {
 // ── Parse worksheet ──────────────────────────────────────────────────────────
 function parseSheet(xml, sharedStrings) {
   const cells = {};
-  const re = /<c\b([^>]*)>([\s\S]*?)<\/c>/g;
+  // Empty-but-styled cells serialize self-closing (<c r="D16" s="7"/>); the
+  // alternation must consume them as empty, or `[^>]*>` would treat the "/" as
+  // an attribute char and lazily swallow the NEXT cell's body up to its </c>.
+  const re = /<c\b([^>]*?)(?:\/>|>([\s\S]*?)<\/c>)/g;
   let m;
   while ((m = re.exec(xml)) !== null) {
     const attrs = m[1];
-    const inner = m[2];
+    const inner = m[2] || "";
     const refM = attrs.match(/\br="([^"]+)"/);
     if (!refM) continue;
     const ref   = refM[1];
@@ -122,14 +125,53 @@ function parseSheet(xml, sharedStrings) {
   return cells;
 }
 
+// ── Resolve a sheet name to its worksheet path via workbook.xml + rels ───────
+function sheetPathByName(files, sheetName) {
+  const wb   = getText(files, "xl/workbook.xml");
+  const rels = getText(files, "xl/_rels/workbook.xml.rels");
+  if (!wb || !rels) return null;
+
+  // rId → target path
+  const targets = {};
+  const relRe = /<Relationship\b[^>]*>/g;
+  let rm;
+  while ((rm = relRe.exec(rels)) !== null) {
+    const idM     = rm[0].match(/\bId="([^"]+)"/);
+    const targetM = rm[0].match(/\bTarget="([^"]+)"/);
+    if (idM && targetM) targets[idM[1]] = targetM[1];
+  }
+
+  const want = String(sheetName).trim().toLowerCase();
+  const sheetRe = /<sheet\b[^>]*>/g;
+  let sm;
+  while ((sm = sheetRe.exec(wb)) !== null) {
+    const nameM = sm[0].match(/\bname="([^"]+)"/);
+    const ridM  = sm[0].match(/\br:id="([^"]+)"/);
+    if (!nameM || !ridM) continue;
+    if (nameM[1].trim().toLowerCase() !== want) continue;
+    const target = targets[ridM[1]];
+    if (!target) return null;
+    // Targets are relative to xl/ (e.g. "worksheets/sheet3.xml") or absolute ("/xl/…")
+    return target.charAt(0) === "/" ? target.slice(1) : "xl/" + target;
+  }
+  return null;
+}
+
 // ── Public API ───────────────────────────────────────────────────────────────
-async function parseXLSX(arrayBuffer) {
+// parseXLSX(arrayBuffer)             → cells of the first worksheet file
+// parseXLSX(arrayBuffer, sheetName)  → cells of the named sheet (throws if absent)
+async function parseXLSX(arrayBuffer, sheetName) {
   const files = await readZip(arrayBuffer);
   const ss    = parseSharedStrings(getText(files, "xl/sharedStrings.xml"));
-  const sxml  = getText(files, "xl/worksheets/sheet1.xml");
-  if (!sxml) throw new Error("sheet1.xml not found in xlsx");
+  let path = "xl/worksheets/sheet1.xml";
+  if (sheetName) {
+    path = sheetPathByName(files, sheetName);
+    if (!path) throw new Error(`Sheet "${sheetName}" not found — is this the right workbook?`);
+  }
+  const sxml = getText(files, path);
+  if (!sxml) throw new Error(`${path} not found in xlsx`);
   return parseSheet(sxml, ss);
 }
 
 global.XLSXMini = { parseXLSX };
-})(window);
+})(typeof window !== "undefined" ? window : globalThis);

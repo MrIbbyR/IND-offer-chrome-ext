@@ -374,6 +374,68 @@
     }
     .currency-note.visible { display: block; }
 
+    /* ── Sheet toggle (External / Internal fitment) ── */
+    .sheet-toggle {
+      margin: 12px 14px 0;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+    .sheet-toggle .sheet-toggle-label {
+      font-size: 10px;
+      color: var(--muted);
+      flex-shrink: 0;
+    }
+    .sheet-toggle .sheet-seg {
+      display: flex;
+      flex: 1;
+      border: 1px solid var(--border);
+      border-radius: 7px;
+      overflow: hidden;
+    }
+    .sheet-toggle .sheet-seg button {
+      flex: 1;
+      padding: 6px 0;
+      background: var(--bg);
+      border: none;
+      color: var(--muted);
+      font-family: var(--display);
+      font-size: 11px;
+      font-weight: 600;
+      cursor: pointer;
+      transition: all 0.15s;
+    }
+    .sheet-toggle .sheet-seg button + button { border-left: 1px solid var(--border); }
+    .sheet-toggle .sheet-seg button.active {
+      background: var(--salary-dim);
+      color: var(--salary-accent);
+    }
+
+    .sheet-hint {
+      margin: 8px 14px 0;
+      padding: 8px 12px;
+      background: var(--warn-dim);
+      border: 1px solid var(--warn);
+      border-radius: 6px;
+      font-size: 10px;
+      color: var(--warn);
+      display: none;
+    }
+    .sheet-hint.visible { display: block; }
+    .sheet-hint button {
+      margin-top: 6px;
+      display: block;
+      padding: 4px 10px;
+      background: none;
+      border: 1px solid var(--warn);
+      border-radius: 5px;
+      color: var(--warn);
+      font-size: 10px;
+      font-weight: 600;
+      cursor: pointer;
+    }
+    .sheet-hint button:hover { background: var(--warn); color: #0d1117; }
+
     /* ── Salary panel ── */
     .salary-fields {
       padding: 14px 14px 0;
@@ -676,11 +738,19 @@
 
   <!-- ── Offer ── -->
   <div class="panel" id="panel-offer">
+    <div class="sheet-toggle">
+      <span class="sheet-toggle-label">Fitment:</span>
+      <div class="sheet-seg" id="sheetSeg">
+        <button type="button" data-sheet="External" class="active">External</button>
+        <button type="button" data-sheet="Internal">Internal</button>
+      </div>
+    </div>
+
     <div class="drop-zone" id="dropZone">
       <input type="file" id="fileInput" accept=".xlsx,.xls" />
       <span class="drop-icon">📂</span>
       <span class="drop-label">Drop Excel file here</span>
-      <span class="drop-sub">or click to browse · .xlsx / .xls</span>
+      <span class="drop-sub">or click to browse · .xlsx — reads the "<span id="dropSheetName">External</span>" sheet</span>
     </div>
 
     <div class="file-loaded" id="fileLoaded">
@@ -691,6 +761,8 @@
       </div>
       <button class="file-clear" id="fileClear" title="Remove file">✕</button>
     </div>
+
+    <div class="sheet-hint" id="sheetHint"></div>
 
     <div class="preview" id="preview">
       <table class="preview-table" id="previewTable"></table>

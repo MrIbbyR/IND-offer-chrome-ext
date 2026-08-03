@@ -105,7 +105,9 @@ Two search modes:
 
 ### XLSX Parser (`xlsx-mini.js`)
 
-Self-contained async XLSX parser with no external dependencies (no SheetJS, no DOM parser). Used exclusively by the Mr Offer tab for drag-and-drop offer letter field filling with fuzzy label matching and annual ↔ monthly salary derivation.
+Self-contained async XLSX parser with no external dependencies (no SheetJS, no DOM parser). Supports reading a named sheet (`parseXLSX(buffer, sheetName)`, resolved via `workbook.xml` + rels). Used exclusively by the Mr Offer tab: `popup.js` reads the **"External"** or **"Internal"** sheet of the "New Fitments_India Base Pay" workbook (popup toggle, persisted as `offerSheetName` in `chrome.storage.local`; External is the default), locating each Pay Element row by its column-B label (`BINDINGS_BY_SHEET` maps offer-form field labels → Pay Element labels per sheet) and taking the amount from the "Proposed" column (E). Only offer-form fields marked required (*) are filled. Tested by `tests/xlsx-mini.test.js`.
+
+**The External and Internal tabs are independent calculators** — nothing links them; each has its own WFA Level and Proposed Total Base Pay input cells, and a recruiter may fill only one. The popup keeps the dropped file's bytes in memory (never persisted) so the toggle re-parses without re-dragging, and shows a passive hint when the selected tab looks like an untouched template (≥3 zero/empty fields) while the other tab holds more values. The Internal SmartRecruiters offer form is not yet mapped — `BINDINGS_BY_SHEET.Internal` currently reuses the External bindings; give it its own array once the internal form's field labels are known.
 
 ## Lessons
 

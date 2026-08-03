@@ -29,28 +29,49 @@
   } catch (_) {}
 })();
 
+// "New Fitments_India Base Pay" workbook: offer numbers live on the "External"
+// sheet (external hires) or the "Internal" sheet (internal moves) — the two
+// tabs are independent calculators with their own input cells, so the popup
+// lets the recruiter pick which one to read. Each sheet has one row per Pay
+// Element (labels in column B), amounts in the "Proposed" column (E). Rows are
+// located by their column-B label rather than fixed addresses, so yearly
+// layout shuffles (and the Internal tab's extra NPS/Superannuation rows)
+// don't silently break the mapping.
+// Only offer-form fields marked required (*) are filled.
+const OFFER_SHEETS = ["External", "Internal"];
+const PROPOSED_COL = "E";
+
 const BINDINGS = [
-  { label: "Annual Salary",                       cell: "E16" },  // Same as Total Base Salary (Annual)
-  { label: "Pay Based on Frequency",              cell: "D6"  },
-  { label: "Basic Pay (Annual)",                  cell: "E6"  },
-  { label: "House Rent Allowance (Monthly)",      cell: "D7"  },
-  { label: "House Rent Allowance (annual)",       cell: "E7"  },
-  { label: "General Allowance (Monthly)",         cell: "D8"  },
-  { label: "General Allowance (annual)",          cell: "E8"  },
-  { label: "Cash Salary (Monthly) Section",       cell: "D10" },
-  { label: "Cash Salary (Annual) Section",        cell: "E10" },
-  { label: "Employer PF Contribution (Monthly)",  cell: "D13" },
-  { label: "Employer PF Contribution (annual)",   cell: "E13" },
-  { label: "Total Base Salary (Monthly)",         cell: "D16" },
-  { label: "Total Base Salary (Annual)",          cell: "E16" },
-  { label: "Monthly Bonus",                       cell: "D19" },
-  { label: "Annual Bonus",                        cell: "E19" },
-  { label: "Total Cash Compensation (Monthly)",   cell: "D21" },
-  { label: "Total Cash Compensation (Annual)",    cell: "E21" },
+  { label: "Total Compensation",                        element: "Total Compensation" },
+  { label: "Basic Salary",                              element: "Basic Salary" },
+  { label: "General Allowance",                         element: "General Allowance" },
+  { label: "HRA",                                       element: "HRA" },
+  { label: "Transport Allowance",                       element: "Transport Allowance" },
+  { label: "Communication Allowance",                   element: "Communication Allowance" },
+  { label: "Upskilling Allowance",                      element: "Upskilling Allowance" },
+  { label: "Total Base Salary (Annual)",                element: "Total Base Pay" },
+  { label: "Employer's Contribution to Provident Fund", element: "Employer's Contribution to PF" },
+  { label: "Statutory Bonus",                           element: "Statutory Bonus (Advance)" },
+  { label: "Annual Bonus",                              element: "Annual Incentive Plan" },
+  { label: "Annual Salary",                             element: "Total Base Pay" },
 ];
 
+// The internal-move SmartRecruiters offer form has not been mapped yet — it
+// reuses the external bindings for now. When the internal form's field labels
+// are known, give Internal its own array here.
+const BINDINGS_BY_SHEET = {
+  External: BINDINGS,
+  Internal: BINDINGS,
+};
+
 // ── State ──
-let parsedValues = {};  // { cell: formattedString }
+let parsedValues = {};   // { UI label: formattedString }
+let offerSheet = "External";  // which workbook tab to read (persisted)
+let loadedBuffer = null;      // ArrayBuffer of the dropped file, in-memory only,
+                              // so switching sheets re-parses without re-dragging
+function activeBindings() {
+  return BINDINGS_BY_SHEET[offerSheet] || BINDINGS;
+}
 
 // ── Usage tracking (local only; for rollout analytics add a backend ping) ──
 async function loadUsageCount() {
@@ -245,12 +266,27 @@ function fmtNum(v) {
 }
 
 // ── Parse Excel file using local xlsx-mini.js ──
-async function parseExcel(arrayBuffer) {
-  const cells = await window.XLSXMini.parseXLSX(arrayBuffer);
-  const values = {};
-  const needed = [...new Set(BINDINGS.map(b => b.cell))];
-  for (const addr of needed) {
-    values[addr] = cells[addr] ? fmtNum(cells[addr]) : "";
+function normElement(s) {
+  return String(s || "").toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
+}
+
+async function parseExcel(arrayBuffer, sheetName) {
+  const cells = await window.XLSXMini.parseXLSX(arrayBuffer, sheetName);
+
+  // Column B holds the Pay Element labels; map normalized label → row number
+  const rowByElement = {};
+  for (const [ref, val] of Object.entries(cells)) {
+    const m = /^B(\d+)$/.exec(ref);
+    if (!m) continue;
+    const key = normElement(val);
+    if (key && !(key in rowByElement)) rowByElement[key] = m[1];
+  }
+
+  const values = {};  // { UI label: formattedString }
+  for (const b of (BINDINGS_BY_SHEET[sheetName] || BINDINGS)) {
+    const row = rowByElement[normElement(b.element)];
+    const raw = row !== undefined ? cells[PROPOSED_COL + row] : "";
+    values[b.label] = (raw !== undefined && raw !== "") ? fmtNum(raw) : "";
   }
   return values;
 }
@@ -259,8 +295,8 @@ async function parseExcel(arrayBuffer) {
 function buildPreview(values) {
   previewTable.innerHTML = "";
   let filled = 0;
-  for (const b of BINDINGS) {
-    const v = values[b.cell] || "";
+  for (const b of activeBindings()) {
+    const v = values[b.label] || "";
     if (v) filled++;
     const tr = document.createElement("tr");
     tr.innerHTML = `
@@ -272,7 +308,98 @@ function buildPreview(values) {
   return filled;
 }
 
+// ── Sheet toggle (External / Internal fitment) ──
+const sheetSeg      = document.getElementById("sheetSeg");
+const sheetHint     = document.getElementById("sheetHint");
+const dropSheetName = document.getElementById("dropSheetName");
+
+function updateSheetToggleUI() {
+  for (const btn of sheetSeg.querySelectorAll("button")) {
+    btn.classList.toggle("active", btn.dataset.sheet === offerSheet);
+  }
+  dropSheetName.textContent = offerSheet;
+}
+
+async function loadOfferSheetSetting() {
+  const { offerSheetName } = await chrome.storage.local.get("offerSheetName");
+  if (OFFER_SHEETS.includes(offerSheetName)) offerSheet = offerSheetName;
+  updateSheetToggleUI();
+}
+
+async function setOfferSheet(sheet) {
+  if (!OFFER_SHEETS.includes(sheet) || sheet === offerSheet) return;
+  const prev = offerSheet;
+  offerSheet = sheet;
+  updateSheetToggleUI();
+  chrome.storage.local.set({ offerSheetName: sheet });
+  if (!loadedBuffer) return;
+  try {
+    await renderLoadedFile();
+  } catch (err) {
+    // e.g. this workbook has no "Internal" tab — revert and surface the error
+    offerSheet = prev;
+    updateSheetToggleUI();
+    chrome.storage.local.set({ offerSheetName: prev });
+    try { await renderLoadedFile(); } catch (_) {}
+    sheetHint.textContent = "✗ " + err.message;
+    sheetHint.classList.add("visible");
+    console.error("Sheet switch failed:", err);
+  }
+}
+
+sheetSeg.addEventListener("click", e => {
+  const sheet = e.target?.dataset?.sheet;
+  if (sheet) setOfferSheet(sheet);
+});
+
+// Count fields that hold a real amount ("" and "0" both mean unfilled here —
+// an untouched fitment calculator legitimately computes 0 for the allowances)
+function countFilledValues(values) {
+  return Object.values(values).filter(v => v && v !== "0").length;
+}
+
+// Warn when the selected tab looks like an untouched template while the other
+// tab holds the actual fitment (recruiter filled Internal but popup reads
+// External, or vice versa). Passive: never switches on its own.
+async function updateSheetHint() {
+  sheetHint.classList.remove("visible");
+  sheetHint.textContent = "";
+  if (!loadedBuffer) return;
+  const other = offerSheet === "External" ? "Internal" : "External";
+  let otherValues;
+  try {
+    otherValues = await parseExcel(loadedBuffer, other);
+  } catch (_) {
+    return; // workbook has no other tab — nothing to compare
+  }
+  const curFilled   = countFilledValues(parsedValues);
+  const curEmpty    = Object.keys(parsedValues).length - curFilled;
+  const otherFilled = countFilledValues(otherValues);
+  if (curEmpty >= 3 && otherFilled > curFilled) {
+    sheetHint.textContent =
+      `⚠ The "${offerSheet}" tab looks unfilled (${curFilled} non-zero fields) — ` +
+      `the "${other}" tab has ${otherFilled}. Is this an ${other.toLowerCase()} fitment?`;
+    const btn = document.createElement("button");
+    btn.textContent = `Switch to ${other}`;
+    btn.addEventListener("click", () => setOfferSheet(other));
+    sheetHint.appendChild(btn);
+    sheetHint.classList.add("visible");
+  }
+}
+
 // ── Handle file ──
+// Parses the in-memory workbook against the currently selected sheet and
+// refreshes the preview; called on file drop and on sheet toggle.
+async function renderLoadedFile() {
+  const values = await parseExcel(loadedBuffer, offerSheet);
+  parsedValues = values;
+  buildPreview(values);
+  const nonEmpty = Object.values(values).filter(Boolean).length;
+  fieldCount.textContent =
+    `${nonEmpty} of ${activeBindings().length} fields have values · "${offerSheet}" tab`;
+  await updateSheetHint();
+}
+
 function handleFile(file) {
   if (!file) return;
 
@@ -282,34 +409,12 @@ function handleFile(file) {
   const reader = new FileReader();
   reader.onload = async function(e) {
     try {
-      const values = await parseExcel(e.target.result);
-
-      // Derive missing monthly values from annual ones if the Excel file
-      // does not contain them explicitly.
-      const derivePairs = [
-        // Cash Salary (Monthly) Section  ←  Cash Salary (Annual) Section
-        { monthly: "D10", annual: "E10" },
-        // Total Base Salary (Monthly)    ←  Total Base Salary (Annual)
-        { monthly: "D16", annual: "E16" },
-        // Total Cash Compensation (Monthly) ← Total Cash Compensation (Annual)
-        { monthly: "D21", annual: "E21" },
-      ];
-      for (const { monthly, annual } of derivePairs) {
-        if (!values[monthly] && values[annual]) {
-          const n = parseFloat(String(values[annual]).replace(/,/g, ""));
-          if (!isNaN(n) && isFinite(n)) {
-            values[monthly] = String(Math.round(n / 12));
-          }
-        }
-      }
-      parsedValues = values;
-      buildPreview(values);
-      const nonEmpty = Object.values(values).filter(Boolean).length;
+      loadedBuffer = e.target.result;
+      await renderLoadedFile();
 
       dropZone.style.display = "none";
       fileLoaded.classList.add("visible");
       fileName.textContent = file.name;
-      fieldCount.textContent = `${nonEmpty} of ${BINDINGS.length} fields have values`;
       preview.classList.add("visible");
       runBtn.classList.add("visible");
       document.getElementById("currencyNote")?.classList.add("visible");
@@ -317,6 +422,7 @@ function handleFile(file) {
       summaryEl.classList.remove("visible");
       logEl.innerHTML = "";
     } catch(err) {
+      loadedBuffer = null;
       label.textContent = "Drop Excel file here";
       // Show error visibly in the drop zone instead of alert
       const sub = dropZone.querySelector(".drop-sub");
@@ -331,8 +437,9 @@ function handleFile(file) {
   reader.readAsArrayBuffer(file);
 }
 
-// Load usage count + Cost assist defaults when popup opens
+// Load usage count + sheet choice + Cost assist defaults when popup opens
 loadUsageCount();
+loadOfferSheetSetting().catch(() => {});
 loadSalarySettings().catch(() => {});
 
 // ── Drag & drop ──
@@ -354,6 +461,9 @@ fileInput.addEventListener("change", () => {
 // ── Clear file ──
 fileClear.addEventListener("click", () => {
   parsedValues = {};
+  loadedBuffer = null;
+  sheetHint.classList.remove("visible");
+  sheetHint.textContent = "";
   fileInput.value = "";
   dropZone.style.display = "";
   fileLoaded.classList.remove("visible");
@@ -399,10 +509,12 @@ runBtn.addEventListener("click", async () => {
   setStatus("running", "Running…");
 
   // Build the payload to send to content script
-  const payload = BINDINGS.map(b => ({
+  const payload = activeBindings().map(b => ({
     label: b.label,
-    value: parsedValues[b.cell] || ""
+    value: parsedValues[b.label] || ""
   }));
+
+  log("·", `Values from the "${offerSheet}" tab of the workbook`);
 
   // Get active tab and inject into ALL frames — form may be in an iframe
   const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
@@ -1740,24 +1852,44 @@ function contentFill(payload) {
           continue;
         }
 
-        // Fuzzy label → block matching on deep text (including shadow DOM)
         const labelNorm = normText(label);
-        let bestInfo = null;
-        let bestScore = 0;
 
-        for (const info of allBlocks) {
-          const score = overlapScore(labelNorm, info.normText);
-          if (score > bestScore) {
-            bestScore = score;
-            bestInfo = info;
-          }
+        // Pass 1 — block text begins with the field label (the label renders
+        // first inside each spl-form-element). Word-overlap alone can't tell
+        // apart same-word-set pairs like "Annual Salary" vs
+        // "Total Base Salary (Annual)", which both score 1.0.
+        const prefixMatches = allBlocks.filter(info =>
+          info.normText === labelNorm || info.normText.startsWith(labelNorm + " ")
+        );
+        let matchInfo = null;
+        if (prefixMatches.length === 1) {
+          matchInfo = prefixMatches[0];
+        } else if (prefixMatches.length > 1) {
+          // e.g. "Annual Bonus" prefixes both "Annual Bonus" and
+          // "Annual Bonus (% based)". Prefer the block whose text continues
+          // with a currency code or a number (an amount field), else DOM order.
+          matchInfo = prefixMatches.find(info => {
+            const rest = info.normText.slice(labelNorm.length).trim();
+            return /^([a-z]{3}( |$)|\d)/.test(rest);
+          }) || prefixMatches[0];
         }
 
-        const matchInfo = bestScore >= 0.5 ? bestInfo : null;
-
+        // Pass 2 — fuzzy word-overlap fallback on deep text (incl. shadow DOM)
         if (!matchInfo) {
-          log.push({ ok: false, msg: `[${idx}] ${label}: block not found (best score=${bestScore.toFixed(2)})` });
-          continue;
+          let bestInfo = null;
+          let bestScore = 0;
+          for (const info of allBlocks) {
+            const score = overlapScore(labelNorm, info.normText);
+            if (score > bestScore) {
+              bestScore = score;
+              bestInfo = info;
+            }
+          }
+          matchInfo = bestScore >= 0.5 ? bestInfo : null;
+          if (!matchInfo) {
+            log.push({ ok: false, msg: `[${idx}] ${label}: block not found (best score=${bestScore.toFixed(2)})` });
+            continue;
+          }
         }
 
         // Prefer a concrete INPUT inside this block rather than generic container
